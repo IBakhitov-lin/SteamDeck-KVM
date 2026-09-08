@@ -1,9 +1,8 @@
 ﻿# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Значок в трее для общей клавиатуры и мыши со Steam Deck:
 # одно приложение вместо пары ярлыков «включить/выключить».
-# ПРОИСХОЖДЕНИЕ — устройство скопировано у JobRadar (private_tools/scripts/jobradar_tray.ps1):
-# единственный экземпляр через мьютекс, значок NotifyIcon, тёмная палитра из общего контракта.
-# Здесь список сокращён до своего размера: нет окна, нет журнала вакансий — есть только
-# состояние «сервер работает / не работает» и переключатель.
+# ПРОИСХОЖДЕНИЕ — каркас (мьютекс, значок, палитра) взят из общего C:\AI\scripts\lib\tray-common.ps1,
+# вынесенного 08.09.2026 из устройства JobRadar (private_tools/scripts/jobradar_tray.ps1) — это
+# уже второй потребитель того же каркаса. Здесь своё — только состояние сервера и переключатель.
 #
 #   Значок в трее      — цвет говорит о состоянии: акцент — работает, серый — нет
 #   ЛКМ по значку      — переключить (включить, если выключено, и наоборот)
@@ -26,17 +25,21 @@ function Log([string]$m) {
 }
 trap { Log ('ТРАП: ' + $_.Exception.Message); continue }
 
-# --- Один экземпляр ---------------------------------------------------------
-$mutex = New-Object System.Threading.Mutex($false, 'Local\SteamDeckKvmTray')
-try { $owns = $mutex.WaitOne(0) } catch { $owns = $false }
-if (-not $owns) {
+# --- Общий каркас трея (мьютекс, значок, палитра) ---------------------------
+# Основной путь — общий модуль на этой машине; запасной — копия в самом
+# репозитории, чтобы приложение работало и там, где C:\AI не существует.
+$ОбщийКаркас = 'C:\AI\scripts\lib\tray-common.ps1'
+if (-not (Test-Path $ОбщийКаркас)) { $ОбщийКаркас = Join-Path $Root 'lib\tray-common.ps1' }
+. $ОбщийКаркас
+
+$экземпляр = Get-ЕдинственныйЭкземпляр 'SteamDeckKvmTray'
+if (-not $экземпляр.Единственный) {
     Log 'второй экземпляр не нужен: приложение уже в трее'
     exit 0
 }
 
 Log '=== запуск приложения ==='
 Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 [System.Windows.Forms.Application]::add_ThreadException({
@@ -44,25 +47,9 @@ Add-Type -AssemblyName System.Drawing
     Log ('сбой: ' + $e.Exception.Message)
 })
 
-# ==== Цвета из общего контракта, а не числами здесь =========================
-function Цвет([string]$hex, [int[]]$запас) {
-    try {
-        $h = $hex.TrimStart('#')
-        return [System.Drawing.Color]::FromArgb(
-            [Convert]::ToInt32($h.Substring(0,2),16),
-            [Convert]::ToInt32($h.Substring(2,2),16),
-            [Convert]::ToInt32($h.Substring(4,2),16))
-    } catch { return [System.Drawing.Color]::FromArgb($запас[0], $запас[1], $запас[2]) }
-}
-$тема = $null
-try { $тема = (Get-Content -LiteralPath $PalettePath -Raw -Encoding UTF8 | ConvertFrom-Json).'тёмная' } catch { }
-function ИзТемы([string]$имя, [int[]]$запас) {
-    if ($тема -and $тема.$имя) { return Цвет $тема.$имя $запас }
-    return [System.Drawing.Color]::FromArgb($запас[0], $запас[1], $запас[2])
-}
-$C_OK   = ИзТемы 'успех'        @(70,200,120)
-$C_OFF  = ИзТемы 'текст_второй' @(160,165,173)
-$C_BG   = ИзТемы 'фон'          @(21,21,23)
+# ==== Цвета из общего контракта — читает Get-ЦветПалитры из tray-common.ps1 =
+$C_OK  = Get-ЦветПалитры 'успех'        @(70,200,120)  -ПутьККонтракту $PalettePath
+$C_OFF = Get-ЦветПалитры 'текст_второй' @(160,165,173) -ПутьККонтракту $PalettePath
 
 # ==== Значок рисуется одним рисунком, меняется только цвет ==================
 # Символ ⇄ — двусторонний обмен, ровно смысл общей клавиатуры и мыши.
@@ -72,20 +59,7 @@ function Значок([bool]$работает) {
     $готовый = if ($работает) { $script:ЗначокОн } else { $script:ЗначокОфф }
     if ($готовый) { return $готовый }
     $цвет = if ($работает) { $C_OK } else { $C_OFF }
-    $bmp = New-Object System.Drawing.Bitmap(32, 32)
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAlias
-    $g.Clear([System.Drawing.Color]::Transparent)
-    $font = New-Object System.Drawing.Font('Segoe UI Symbol', 20, [System.Drawing.FontStyle]::Bold)
-    $brush = New-Object System.Drawing.SolidBrush $цвет
-    $fmt = New-Object System.Drawing.StringFormat
-    $fmt.Alignment = [System.Drawing.StringAlignment]::Center
-    $fmt.LineAlignment = [System.Drawing.StringAlignment]::Center
-    $g.DrawString([char]0x21C4, $font, $brush, (New-Object System.Drawing.RectangleF(0,0,32,32)), $fmt)
-    $g.Dispose()
-    $hicon = $bmp.GetHicon()
-    $ico = [System.Drawing.Icon]::FromHandle($hicon)
+    $ico = New-СимвольныйЗначок -Символ ([char]0x21C4) -Цвет $цвет
     if ($работает) { $script:ЗначокОн = $ico } else { $script:ЗначокОфф = $ico }
     return $ico
 }
