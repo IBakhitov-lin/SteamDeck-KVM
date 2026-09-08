@@ -33,14 +33,14 @@ $script:PaletteCache = $null
 function Get-PaletteColor {
     <#
     .SYNOPSIS
-    Цвет из палитры (по умолчанию C:\AI\templates\палитра.json, тема 'тёмная').
+    Цвет из палитры (по умолчанию C:\AI\templates\palette.json, тема 'тёмная').
     Отсутствие файла или поля не считается ошибкой — отдаётся запасной цвет.
     #>
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][int[]]$Fallback,
         [string]$Theme = 'тёмная',
-        [string]$ContractPath = 'C:\AI\templates\палитра.json'
+        [string]$ContractPath = 'C:\AI\templates\palette.json'
     )
     if ($null -eq $script:PaletteCache) {
         $script:PaletteCache = @{}

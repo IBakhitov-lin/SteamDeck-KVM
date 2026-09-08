@@ -1,5 +1,7 @@
 # Shared Keyboard & Mouse: Windows PC ↔ Steam Deck
 
+**English** · [Русский](README.ru.md)
+
 One keyboard and mouse for both machines — the mouse cursor walks off the edge
 of your monitor and onto the Deck's screen, the keyboard follows it. Nothing
 gets unplugged or re-paired.

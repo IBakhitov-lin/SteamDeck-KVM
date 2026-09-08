@@ -33,7 +33,7 @@ if (-not (Test-Path $TrayCommonPath)) { $TrayCommonPath = Join-Path $Root 'lib\t
 
 # То же для контракта цветов: реальный канон на этой машине, иначе — вендорная
 # копия рядом (lib\palette.json), чтобы вид не менялся от того, где запущено.
-$PalettePath = 'C:\AI\templates\палитра.json'
+$PalettePath = 'C:\AI\templates\palette.json'
 if (-not (Test-Path $PalettePath)) { $PalettePath = Join-Path $Root 'lib\palette.json' }
 
 $instance = Get-SingleInstanceLock 'SteamDeckKvmTray'
