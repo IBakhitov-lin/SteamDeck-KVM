@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 # Установка общей клавиатуры и мыши на Steam Deck.
 # Запускать НА ДЕКЕ, в Desktop Mode, из Konsole:
-#     bash ~/Desktop/SteamDeck-KVM/установить-на-Deck.sh
+#     bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh <адрес-или-IP-ноутбука>[,запасной-адрес]
+#
+# Пример:
+#     bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh 192.168.0.14
 set -euo pipefail
 
-DEFAULT_SERVER="192.168.0.14,Ilnur.local"   # адреса ноутбука, пробуются по очереди
-SCREEN_NAME="steamdeck"                      # это имя должно совпадать с screens.conf на ноутбуке
+SCREEN_NAME="steamdeck"   # это имя должно совпадать с screens.conf на ноутбуке
 PORT="24800"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER="${1:-$DEFAULT_SERVER}"
+SERVER="${1:-}"
+
+if [ -z "$SERVER" ]; then
+	echo "Нужен адрес ноутбука первым аргументом — IP или сетевое имя," >&2
+	echo "можно несколько через запятую (пробуются по очереди)." >&2
+	echo "Пример:  bash install-on-deck.sh 192.168.1.50" >&2
+	exit 1
+fi
 
 echo
 echo "=== Общая клавиатура и мышь для Steam Deck ==="

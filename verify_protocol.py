@@ -19,11 +19,11 @@ fake_fcntl = types.ModuleType("fcntl")
 fake_fcntl.ioctl = lambda *a, **k: 0
 sys.modules.setdefault("fcntl", fake_fcntl)
 
-ЗДЕСЬ = os.path.dirname(os.path.abspath(__file__))
-ПУТЬ = os.path.join(ЗДЕСЬ, "deck-kvm.py")
-if not os.path.exists(ПУТЬ):
-    ПУТЬ = "/var/lib/deck-kvm/deck-kvm.py"
-SPEC = importlib.util.spec_from_file_location("deckkvm", ПУТЬ)
+HERE = os.path.dirname(os.path.abspath(__file__))
+MODULE_PATH = os.path.join(HERE, "deck-kvm.py")
+if not os.path.exists(MODULE_PATH):
+    MODULE_PATH = "/var/lib/deck-kvm/deck-kvm.py"
+SPEC = importlib.util.spec_from_file_location("deckkvm", MODULE_PATH)
 mod = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(mod)
 
@@ -309,7 +309,7 @@ def test_fixes():
 
     c.hosts = ["первый", "второй"]
     c.session = session_long
-    c.УДАЧНАЯ_СЕССИЯ = 0.01          # «долгая» сессия для теста — сотая секунды
+    c.STABLE_SESSION_SECONDS = 0.01          # «долгая» сессия для теста — сотая секунды
     mod.time.sleep = lambda s: None
     try:
         c.run()

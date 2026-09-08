@@ -1,159 +1,189 @@
-# Общая клавиатура и мышь: ноутбук ↔ Steam Deck
+# Shared Keyboard & Mouse: Windows PC ↔ Steam Deck
 
-Мышь и клавиатура остаются подключёнными к ноутбуку. Курсор доходит до правого
-края экрана — и продолжает движение уже на Deck'е. Клавиатура печатает туда же,
-куда смотрит курсор. Ничего не переподключается.
+One keyboard and mouse for both machines — the mouse cursor walks off the edge
+of your monitor and onto the Deck's screen, the keyboard follows it. Nothing
+gets unplugged or re-paired.
 
-**Работает в игровом режиме SteamOS,** а не только на рабочем столе: Deck видит
-не программу, а обычную USB-клавиатуру и обычную мышь — они создаются прямо в
-ядре. Поэтому ввод доходит и до Steam, и до игр.
+**Works in SteamOS Game Mode, not just Desktop Mode.** The Deck doesn't see a
+piece of software — it sees an ordinary USB keyboard and an ordinary USB
+mouse, created directly in the kernel. So input reaches Steam itself and
+whatever game is running, not only the desktop.
 
-## Что уже сделано на ноутбуке
+## Why this exists
 
-Ничего делать не нужно, всё настроено:
+[Input Leap](https://github.com/input-leap/input-leap) (the maintained fork of
+Barrier/Synergy) was archived on 2026-07-26. Its spiritual successor,
+[Deskflow](https://github.com/deskflow/deskflow), works well — but like every
+other KVM tool (Deskflow, [waynergy](https://github.com/r-c-f/waynergy),
+[lan-mouse](https://github.com/feschber/lan-mouse)), the *client* side hands
+input to the desktop compositor. SteamOS's Game Mode runs `gamescope`, which
+doesn't accept those clients — so none of them work outside Desktop Mode.
 
-| Что | Где |
+This client (`deck-kvm.py`) writes straight into the Linux kernel via
+`/dev/uinput`, bypassing the compositor entirely. The compositor — or its
+absence — becomes irrelevant.
+
+## What's inside
+
+| Piece | Role |
 | --- | --- |
-| Программа-сервер Deskflow 1.26 | `C:\Program Files\Deskflow` |
-| Раскладка экранов и настройки | `%LOCALAPPDATA%\SteamDeck-KVM` |
-| Ярлык **SteamDeck-KVM** — одно приложение, значок в трее | Рабочий стол |
-| Разрешение в брандмауэре | добавлено установщиком Deskflow |
+| Windows side | [Deskflow](https://github.com/deskflow/deskflow) server (Barrier/Synergy protocol), plus a system-tray toggle app |
+| `deck-kvm.py` | The Deck-side client — pure Python 3 standard library, no dependencies |
+| `SteamDeck-KVM.ps1` | Windows tray icon: click to start/stop the server |
+| `install-on-deck.sh` | One-shot installer: systemd service, `uinput` module, config file |
+| `verify_kernel.py` | Sanity check on the real kernel: creates devices, reads events back |
+| `verify_protocol.py` | Sanity check of the wire protocol against a real Deskflow server |
 
-Автозапуска нет намеренно: сервер поднимается только когда вы открыли приложение.
+## Setup
 
-## Что сделать один раз на Deck'е
+### 1. Windows PC (the machine whose keyboard/mouse you're sharing)
 
-1. Скопируйте **всю эту папку** на Steam Deck — на его рабочий стол.
-   Годится флешка, microSD или `Отправить` по сети.
-2. На Deck'е переключитесь в режим рабочего стола, откройте **Konsole** и
-   выполните:
+```powershell
+winget install --id Deskflow.Deskflow --exact
+```
 
-   ```
-   bash ~/Desktop/SteamDeck-KVM/установить-на-Deck.sh
-   ```
-
-3. Если Deck попросит пароль, а вы его никогда не задавали — сначала выполните
-   команду `passwd`, придумайте пароль, потом повторите шаг 2.
-
-Всё. Дальше Deck сам поднимает связь при каждом включении, в любом режиме.
-
-## Как этим пользоваться
-
-Один ярлык на рабочем столе — **SteamDeck-KVM**. Открывает не окно, а значок в
-трее (у часов, нижний правый угол экрана): ⇄ серого цвета — выключено, ⇄ цветное
-— работает.
-
-| Действие | Как |
-| --- | --- |
-| Открыть приложение | ярлык **SteamDeck-KVM** на рабочем столе (один раз за сеанс — повторный запуск просто покажет, что оно уже работает) |
-| Включить / выключить | клик по значку в трее — левой кнопкой мыши, переключает туда-обратно |
-| То же через меню | правая кнопка по значку → **Включить** / **Выключить** |
-| Перейти на Deck | довести курсор до правого края экрана и задержать |
-| Перепрыгнуть на Deck сразу | **Win + Shift + D** |
-| Вернуться на ноутбук | **Win + Shift + W** или левый край экрана Deck'а |
-| Открыть журнал | правая кнопка по значку → **Открыть журнал** |
-| Закрыть совсем | правая кнопка по значку → **Выход** (останавливает сервер и убирает значок) |
-
-## Чего эта связка не делает
-
-- **Общий буфер обмена не работает.** Скопированное на ноутбуке не вставится на
-  Deck'е. Причина: буфер живёт в графической оболочке, а мы работаем в обход неё —
-  ровно этим и куплена работа в игровом режиме.
-- **Перетаскивание файлов между экранами не работает** — по той же причине.
-- Мышь и клавиатура остаются рабочими на ноутбуке всё время; на Deck они
-  «уходят», только пока курсор на его стороне.
-
-## Настройка
-
-**Deck слева, а не справа.** На ноутбуке откройте
-`%LOCALAPPDATA%\SteamDeck-KVM\screens.conf` и поменяйте местами `right` и `left`
-в разделе `links`. Потом выключите и включите ярлыком.
-
-**У ноутбука сменился адрес.** Сейчас Deck ищет ноутбук по `192.168.0.14`, а если
-не находит — по имени `Ilnur.local`. Поменять список на Deck'е:
+Configure it as a server (GUI or config file) with **one screen entry for your
+PC and one for the Deck** — the screen names must match what you put in
+`/etc/deck-kvm.conf` on the Deck in step 2. Example `screens.conf`:
 
 ```
+section: screens
+	my-pc:
+	steamdeck:
+end
+section: links
+	my-pc:
+		right = steamdeck
+	steamdeck:
+		left = my-pc
+end
+```
+
+Run `SteamDeck-KVM.ps1` (or double-click a shortcut pointing at it) — it sits
+in the system tray; click it to start/stop the server. See
+[SteamDeck-KVM.ps1](SteamDeck-KVM.ps1) for what it wires up (single-instance
+guard, colored tray icon, no console window).
+
+### 2. Steam Deck
+
+1. Copy this whole folder onto the Deck — USB drive, `scp`, whatever's handy.
+2. Switch to Desktop Mode, open **Konsole**, run:
+
+   ```bash
+   bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh <your-pc's-IP-or-hostname>
+   ```
+
+   Example: `bash install-on-deck.sh 192.168.1.50`. You can pass a
+   comma-separated fallback list: `192.168.1.50,my-pc.local`.
+3. If the Deck asks for a password you've never set, run `passwd` first, then
+   repeat step 2.
+
+Done. The client comes up as a `systemd` service on every boot, in every mode.
+
+## Using it
+
+| Action | How |
+| --- | --- |
+| Start/stop the server | Click the tray icon on Windows (left-click toggles; right-click for a menu) |
+| Move to the Deck | Push the mouse cursor to the shared screen edge and hold it there |
+| Jump to the Deck instantly | **Win+Shift+D** (or whatever hotkey you set in `screens.conf`) |
+| Jump back | **Win+Shift+W**, or the opposite screen edge |
+| View the Windows-side log | Right-click the tray icon → **Open log** |
+| Fully quit | Right-click the tray icon → **Exit** (stops the server too) |
+
+## What this does *not* do
+
+- **No shared clipboard.** Copying text on one machine won't paste on the
+  other — the clipboard lives in the desktop shell, and this tool works
+  around the shell entirely on purpose (that's the whole point in Game Mode).
+- **No file drag-and-drop** between screens, same reason.
+- Your keyboard and mouse stay fully usable on the PC the whole time; they
+  only "leave" while the cursor is on the Deck's side.
+
+## Configuration
+
+**Deck is on the left, not the right.** Swap `right`/`left` in your
+`screens.conf` on the Windows side, then restart the tray app's server.
+
+**The PC's address changed.** Edit `/etc/deck-kvm.conf` on the Deck:
+
+```bash
 sudo nano /etc/deck-kvm.conf
 sudo systemctl restart deck-kvm
 ```
 
-**Курсор ведёт себя странно — прыгает или не попадает туда, куда ведёте.**
-Переключите указатель на относительный режим: в `/etc/deck-kvm.conf` строка
-`pointer=rel`, потом `sudo systemctl restart deck-kvm`. По умолчанию стоит `abs` —
-положение задаётся абсолютными осями, и ускорение указателя на него не влияет.
+**Cursor jumps around or lands in the wrong spot.** Switch to relative
+pointer mode: set `pointer=rel` in `/etc/deck-kvm.conf`, then
+`sudo systemctl restart deck-kvm`. The default, `pointer=abs`, drives the
+cursor with absolute axes so OS-level pointer acceleration can't distort it —
+try `rel` only if `abs` misbehaves on your setup.
 
-**Проверить, что ядро принимает устройства** — прямо на Deck'е:
+**Check the kernel side is working**, on the Deck itself:
 
-```
-sudo python3 ~/Desktop/SteamDeck-KVM/проверка-ядра.py
-```
-
-Скрипт создаёт клавиатуру и мышь, шлёт события и читает их обратно из ядра.
-Все строки должны быть `OK`.
-
-**Проверить разбор протокола** — работает и на ноутбуке, и на Deck'е, прав не просит:
-
-```
-python3 ~/Desktop/SteamDeck-KVM/проверка-протокола.py
+```bash
+sudo python3 ~/Desktop/SteamDeck-KVM/verify_kernel.py
 ```
 
-**Убрать автозапуск на Deck'е** (запускать вручную, когда нужно):
+Creates the virtual keyboard and mouse, sends events, reads them back from
+the kernel. Every line should read `OK`.
 
+**Check the wire protocol** — runs on either machine, no special privileges:
+
+```bash
+python3 ~/Desktop/SteamDeck-KVM/verify_protocol.py
 ```
-sudo systemctl disable deck-kvm      # снять с автозапуска
-sudo systemctl start deck-kvm        # запустить на этот раз
+
+**Disable the systemd auto-start** (run it manually instead):
+
+```bash
+sudo systemctl disable deck-kvm
+sudo systemctl start deck-kvm   # for this session only
 ```
 
-Служба в простое занимает около 15 МБ памяти и раз в 15 секунд пробует
-достучаться до ноутбука — на время работы Deck'а это не влияет.
+Idle, the service uses about 15 MB of RAM and retries the connection every
+15 seconds — negligible while the Deck is on.
 
-## Если не соединяется
+## Troubleshooting
 
-| Признак | Причина и что делать |
+| Symptom | Cause / fix |
 | --- | --- |
-| На Deck'е в журнале «нет связи» | На ноутбуке значок в трее серый — кликните, чтобы включить |
-| То же, но значок цветной | На ноутбуке поднят Outline или другой VPN — он уводит маршруты. Отключите VPN и проверьте снова |
-| Курсор не переходит за край | Deck не подключился: проверьте журнал на Deck'е |
-| Курсор переходит, но клики не проходят | Служба на Deck'е запущена не от root — переустановите шагом 2 |
+| Deck log says "no connection" | Tray icon on the PC is grey — click it to start the server |
+| Same, but the icon is colored (server running) | A VPN on the PC is rerouting traffic. Disable it and retry |
+| Cursor won't cross the screen edge | Deck hasn't connected — check its log |
+| Cursor crosses, but clicks/keys don't register | The Deck service isn't running as root — re-run the installer |
 
-Журнал на Deck'е:
+Deck-side log:
 
-```
+```bash
 journalctl -u deck-kvm -f
 ```
 
-Журнал на ноутбуке — правая кнопка по значку в трее → **Открыть журнал**,
-либо файл `%LOCALAPPDATA%\SteamDeck-KVM\трей.log`.
+Windows-side log: right-click the tray icon → **Open log**, or open
+`%LOCALAPPDATA%\SteamDeck-KVM\tray.log` directly.
 
-## Как это устроено
+## How it works
 
-Ноутбук — сервер Deskflow: он ловит мышь у края экрана и шлёт события по сети,
-порт 24800. Deck — клиент `deck-kvm.py` из этой папки: он принимает события и
-создаёт через `/dev/uinput` два виртуальных устройства ядра — «Deck KVM Keyboard»
-и «Deck KVM Mouse». Мышь заявляет и абсолютные оси (положение курсора), и
-относительные (движение внутри игры, когда курсор захвачен), клавиатура умеет
-удержание, отпускание и автоповтор.
+The PC runs a Deskflow server: it watches for the cursor hitting a screen
+edge and streams input events over TCP, port 24800. The Deck runs
+`deck-kvm.py`, a from-scratch client for the same wire protocol (Barrier/
+Synergy family): it decodes those events and replays them through
+`/dev/uinput` as two virtual kernel devices, "Deck KVM Keyboard" and
+"Deck KVM Mouse." The mouse exposes both absolute axes (cursor position) and
+relative axes (in-game look/aim once the cursor is captured); the keyboard
+supports press, release, and OS-level key repeat.
 
-Адрес и порт — не автопоиск в сети, а обычный TCP: клиент на Deck'е сам
-подключается по адресу из `/etc/deck-kvm.conf`, сервер просто слушает порт и
-принимает того, чьё имя экрана совпало с `screens.conf`. Работает только внутри
-одной локальной сети; трафик не шифруется — не выносите это за пределы LAN.
+Addressing is a plain TCP connection, not network discovery — the Deck client
+dials out to whatever address you put in `/etc/deck-kvm.conf`; the server
+just listens on its port and accepts whichever client's screen name matches
+its config. This only works on one local network; the connection is
+**unencrypted** — don't run it across anything but a trusted LAN.
 
-`SteamDeck-KVM.ps1` — значок в трее — на моей машине берёт общий каркас
-(мьютекс, палитра, отрисовка значка) из `C:\AI\scripts\lib\tray-common.ps1`;
-если такого пути нет (репозиторий склонирован не у меня), автоматически берёт
-копию рядом, в `lib\tray-common.ps1`. Оба пути проверены вживую.
+## Uninstall (Deck side)
 
-Готовые клиенты (Deskflow, waynergy, Lan Mouse) отдают ввод графической оболочке
-и потому в игровом режиме не работают: там композитор `gamescope` не пускает к
-себе такие программы. Этот клиент пишет в ядро, минуя оболочку, — поэтому режим
-ему безразличен.
-
-Шифрования в канале нет: обмен идёт в домашней сети. Не запускайте это в чужой
-сети — в ней ваши нажатия клавиш видны.
-
-## Удалить с Deck'а
-
+```bash
+bash ~/Desktop/SteamDeck-KVM/uninstall-from-deck.sh
 ```
-bash ~/Desktop/SteamDeck-KVM/удалить-с-Deck.sh
-```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

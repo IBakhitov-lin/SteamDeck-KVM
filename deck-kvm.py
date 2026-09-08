@@ -547,7 +547,7 @@ class DeckKVM:
 
     # Сессия, продержавшаяся дольше этого, считается удачной: адрес верный,
     # и разгонять задержку повторов заново незачем.
-    УДАЧНАЯ_СЕССИЯ = 30
+    STABLE_SESSION_SECONDS = 30
 
     def run(self):
         delay = 1
@@ -562,7 +562,7 @@ class DeckKVM:
             except Exception as err:  # обрыв сети — не повод умирать
                 # session() выходит только исключением, поэтому сброс задержки
                 # живёт ЗДЕСЬ: строка после вызова была бы недостижимой.
-                if time.monotonic() - started >= self.УДАЧНАЯ_СЕССИЯ:
+                if time.monotonic() - started >= self.STABLE_SESSION_SECONDS:
                     delay = 1               # адрес рабочий, его и держим
                 else:
                     index += 1              # пробуем следующий из списка
@@ -606,7 +606,8 @@ def main():
         host = sys.argv[1]
     if not host:
         print("не задан адрес ноутбука: укажите его в /etc/deck-kvm.conf "
-              "строкой server=192.168.0.14", file=sys.stderr)
+              "строкой server=<IP или имя вашего компьютера>, например "
+              "server=192.168.1.50", file=sys.stderr)
         return 2
     hosts = [h for h in host.split(",") if h.strip()]
 

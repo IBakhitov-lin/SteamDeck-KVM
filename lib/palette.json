@@ -1,0 +1,10 @@
+{
+  "_purpose": "Standalone color contract for the SteamDeck-KVM tray icon. On the author's own machine the real contract at C:\\AI\\templates\\палитра.json takes precedence (tray-common.ps1 prefers it automatically); this file is only the fallback so the app looks the same for everyone else who clones this repo.",
+  "_edit_rule": "Change values here freely to restyle YOUR copy of the app — it has no effect on anyone else's.",
+
+  "тёмная": {
+    "успех": "#46c878",
+    "текст_второй": "#a0a5ad",
+    "акцент": "#6eaaff"
+  }
+}

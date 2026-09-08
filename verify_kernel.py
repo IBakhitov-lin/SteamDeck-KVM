@@ -1,7 +1,7 @@
 """Проверка на настоящем ядре Linux: создаются ли виртуальные устройства
 и доходят ли до ядра события, которые шлёт клиент.
 
-Запускать НА ДЕКЕ от root:  sudo python3 ~/Desktop/SteamDeck-KVM/проверка-ядра.py
+Запускать НА ДЕКЕ от root:  sudo python3 ~/Desktop/SteamDeck-KVM/verify_kernel.py
 """
 import importlib.util
 import os
@@ -9,11 +9,11 @@ import re
 import sys
 import time
 
-ЗДЕСЬ = os.path.dirname(os.path.abspath(__file__))
-ПУТЬ = os.path.join(ЗДЕСЬ, "deck-kvm.py")
-if not os.path.exists(ПУТЬ):
-    ПУТЬ = "/var/lib/deck-kvm/deck-kvm.py"
-SPEC = importlib.util.spec_from_file_location("deckkvm", ПУТЬ)
+HERE = os.path.dirname(os.path.abspath(__file__))
+MODULE_PATH = os.path.join(HERE, "deck-kvm.py")
+if not os.path.exists(MODULE_PATH):
+    MODULE_PATH = "/var/lib/deck-kvm/deck-kvm.py"
+SPEC = importlib.util.spec_from_file_location("deckkvm", MODULE_PATH)
 mod = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(mod)
 
@@ -85,15 +85,15 @@ check(bool(mouse_rec) and re.search(r"B: REL=[0-9a-f]*3\b", mouse_rec) is not No
       "у мыши заявлены оси REL_X и REL_Y")
 check(bool(mouse_rec) and re.search(r"B: ABS=[0-9a-f]*3\b", mouse_rec) is not None,
       "у мыши заявлены оси ABS_X и ABS_Y")
-абс = None
+abs_caps = None
 if mouse_rec:
     sysfs = re.search(r"S: Sysfs=(\S+)", mouse_rec)
     if sysfs:
         try:
-            абс = open("/sys" + sysfs.group(1) + "/capabilities/abs").read().strip()
+            abs_caps = open("/sys" + sysfs.group(1) + "/capabilities/abs").read().strip()
         except OSError:
-            абс = None
-check(абс is None or int(абс.split()[-1], 16) & 0b11 == 0b11,
+            abs_caps = None
+check(abs_caps is None or int(abs_caps.split()[-1], 16) & 0b11 == 0b11,
       "ядро подтверждает обе абсолютные оси в списке возможностей")
 check(bool(kbd_rec) and "Vendor=1209" in kbd_rec,
       "устройство опознаётся по идентификатору производителя")
