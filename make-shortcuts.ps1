@@ -25,37 +25,9 @@ $ФайлЗначка = Join-Path $Root 'SteamDeck-KVM.ico'
 $Запускатель = Join-Path $Root 'SteamDeck-KVM.vbs'
 
 # ==== Значок ==================================================================
-# .ico собирается вручную из четырёх размеров PNG: System.Drawing умеет писать
-# только однокадровый .ico в 32x32 через GetHicon, а панель задач и проводник
-# берут 16, 32, 48 и 256 — без них Windows масштабирует один кадр и мылит края.
-function Собрать-Ico([string]$Путь, [int[]]$Размеры) {
-    $кадры = @()
-    foreach ($размер in $Размеры) {
-        $bmp = Новый-Значок $размер
-        $поток = New-Object System.IO.MemoryStream
-        $bmp.Save($поток, [System.Drawing.Imaging.ImageFormat]::Png)
-        $кадры += , @{ Размер = $размер; Байты = $поток.ToArray() }
-        $поток.Dispose(); $bmp.Dispose()
-    }
-
-    $файл = [System.IO.File]::Create($Путь)
-    $w = New-Object System.IO.BinaryWriter($файл)
-    try {
-        $w.Write([uint16]0); $w.Write([uint16]1); $w.Write([uint16]$кадры.Count)
-        $смещение = 6 + 16 * $кадры.Count
-        foreach ($кадр in $кадры) {
-            $байтРазмера = if ($кадр.Размер -ge 256) { 0 } else { $кадр.Размер }
-            $w.Write([byte]$байтРазмера); $w.Write([byte]$байтРазмера)
-            $w.Write([byte]0); $w.Write([byte]0)
-            $w.Write([uint16]1); $w.Write([uint16]32)
-            $w.Write([uint32]$кадр.Байты.Length); $w.Write([uint32]$смещение)
-            $смещение += $кадр.Байты.Length
-        }
-        foreach ($кадр in $кадры) { $w.Write($кадр.Байты) }
-    } finally { $w.Dispose(); $файл.Dispose() }
-}
-
-Собрать-Ico $ФайлЗначка @(16, 32, 48, 256)
+# Сборка живёт в app-window.ps1 — там же, где её читает само приложение. Копия
+# здесь означала бы два рисунка, расходящихся на первой правке одного из них.
+Собрать-Ico $ФайлЗначка
 "Значок собран: $ФайлЗначка ($((Get-Item $ФайлЗначка).Length) байт, 4 размера)"
 
 # ==== Ярлыки ==================================================================

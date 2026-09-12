@@ -20,6 +20,7 @@ $Root       = $PSScriptRoot
 $Core       = 'C:\Program Files\Deskflow\deskflow-core.exe'
 $ConfDir    = Join-Path $env:LOCALAPPDATA 'SteamDeck-KVM'
 $ServerConf = Join-Path $ConfDir 'deskflow-server.conf'
+$ScreensConf = Join-Path $ConfDir 'screens.conf'
 $PairFile   = Join-Path $ConfDir 'pair.json'
 $LogFile    = Join-Path $ConfDir 'tray.log'
 
@@ -87,7 +88,14 @@ function Load-Pair {
 }
 
 function Save-Pair {
-    try { $script:Pair | ConvertTo-Json | Set-Content -LiteralPath $PairFile -Encoding UTF8 } catch { }
+    # Без служебной метки кодировки: `Set-Content -Encoding UTF8` ставит её всегда, а память
+    # пары читает не только это приложение — сторож C:\AI\scripts\check-foreign-config-bom.py
+    # нашёл её здесь 12.09.2026 в одном ряду с настройкой, о которую споткнулся Deskflow.
+    # Файлу данных метка не нужна ни одному читателю, а сломать может любого.
+    try {
+        [System.IO.File]::WriteAllText($PairFile, ($script:Pair | ConvertTo-Json),
+            (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
 }
 
 function Forget-Deck {
@@ -98,6 +106,105 @@ function Forget-Deck {
     $script:DeckSeen = [datetime]::MinValue
     Save-Pair
     Write-Log 'пара забыта: следующий откликнувшийся Deck станет новым'
+}
+
+# ==== Настройка сервера: создаётся сама, а не требуется от человека ==========
+# Файла настройки может не быть по трём причинам: первый запуск, чистка папки
+# AppData, перенос на другую машину. Во всех трёх человеку сообщать не о чем —
+# содержимое файла целиком выводимо: имя этого компьютера, имя экрана Deck'а,
+# порт и сторона перехода. Прежняя версия вместо этого показывала окно «Не
+# найден файл настройки… восстановите его из папки приложения», то есть просила
+# человека сделать за приложение работу, которую оно умеет делать само.
+#
+# Имя экрана берётся из имени компьютера, а не пишется строкой: зашитое «Ilnur»
+# работало ровно на одной машине, а на любой другой сервер не находил своего
+# экрана в раскладке и молча не поднимал переход.
+# Настройку читает ЧУЖАЯ программа — deskflow-core. `Set-Content -Encoding UTF8`
+# в Windows PowerShell ставит в начало файла служебную метку кодировки (три
+# байта EF BB BF), и Deskflow об неё спотыкается: замер 12.09.2026 — сервер не
+# поднимался вовсе, порт 24800 не слушал никто, а в журнале приложения при этом
+# стояло «сервер включён». Тот же файл без метки поднимает сервер сразу.
+function Записать-БезМетки([string]$Путь, [string]$Текст) {
+    [System.IO.File]::WriteAllText($Путь, $Текст, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Файл, записанный прежней версией, чинится сам: иначе человек остаётся с
+# настройкой, которая выглядит целой и не работает, — и ему нечего искать.
+function Снять-Метку([string]$Путь) {
+    try {
+        if (-not (Test-Path $Путь)) { return }
+        $байты = [System.IO.File]::ReadAllBytes($Путь)
+        if ($байты.Length -lt 3) { return }
+        if ($байты[0] -ne 0xEF -or $байты[1] -ne 0xBB -or $байты[2] -ne 0xBF) { return }
+        $текст = [System.Text.Encoding]::UTF8.GetString($байты, 3, $байты.Length - 3)
+        Записать-БезМетки $Путь $текст
+        Write-Log "снята служебная метка кодировки с $Путь — Deskflow её не читает"
+    } catch {
+        Write-Log ('не удалось снять метку: ' + $_.Exception.Message)
+    }
+}
+
+function Ensure-Config {
+    $имяПК = $env:COMPUTERNAME
+    if (-not $имяПК) { $имяПК = 'pc' }
+
+    Снять-Метку $ServerConf
+    Снять-Метку $ScreensConf
+
+    if (-not (Test-Path $ScreensConf)) {
+        $раскладка = @"
+# Раскладка экранов для общей клавиатуры и мыши.
+# Deck стоит СПРАВА от этого компьютера: чтобы поменять сторону,
+# поменяйте местами right и left в разделе links.
+
+section: screens
+	${имяПК}:
+	steamdeck:
+end
+
+section: links
+	${имяПК}:
+		right = steamdeck
+	steamdeck:
+		left = $имяПК
+end
+
+section: options
+	# Курсор переходит не мгновенно, а если задержаться у края
+	switchDelay = 250
+	# Win+Shift+D — перепрыгнуть на Deck, Win+Shift+W — обратно
+	keystroke(super+shift+d) = switchToScreen(steamdeck)
+	keystroke(super+shift+w) = switchToScreen($имяПК)
+end
+"@
+        Записать-БезМетки $ScreensConf $раскладка
+        Write-Log "создана раскладка экранов $ScreensConf (экран компьютера назван «$имяПК»)"
+    }
+
+    if (-not (Test-Path $ServerConf)) {
+        $путьРаскладки = $ScreensConf -replace '\\', '/'
+        $настройка = @"
+[core]
+coreMode=server
+computerName=$имяПК
+port=$KvmPort
+useHooks=true
+preventSleep=false
+
+[security]
+tlsEnabled=false
+checkPeerFingerprints=false
+
+[server]
+externalConfig=true
+externalConfigFile=$путьРаскладки
+
+[log]
+level=INFO
+"@
+        Записать-БезМетки $ServerConf $настройка
+        Write-Log "создана настройка сервера $ServerConf"
+    }
 }
 
 # ==== Состояние сервера ======================================================
@@ -115,15 +222,7 @@ winget install --id Deskflow.Deskflow --exact
 "@ | Out-Null
         return
     }
-    if (-not (Test-Path $ServerConf)) {
-        Write-Log "ОШИБКА: нет конфигурации $ServerConf"
-        Показать-Сообщение -Заголовок 'Нет настройки сервера' -Владелец $ui.Форма -Текст @"
-Не найден файл настройки: $ServerConf
-
-Без него сервер не знает, где стоит экран Deck'а. Файл создаётся при установке; если он пропал, восстановите его из папки приложения.
-"@ | Out-Null
-        return
-    }
+    Ensure-Config
     try {
         Start-Process -FilePath $Core -ArgumentList @('server', '--new-instance', '-s', $ServerConf) -WindowStyle Hidden
         Write-Log 'сервер включён'
@@ -266,25 +365,53 @@ $C = $ui.Цвета
 
 # ==== Значок в трее: меню короткое, состояние словом, действия — в окне ======
 $ni = New-Object System.Windows.Forms.NotifyIcon
-$ni.Icon = Значок-Приложения
+$ni.Icon = Значок-Трея
 $ni.Text = 'Общая клавиатура и мышь'
 $ni.Visible = $true
 
-$menu = New-Object System.Windows.Forms.ContextMenuStrip
-$menu.Font = Шрифт 9.5
-$itemHeader = $menu.Items.Add('Общая клавиатура и мышь')
-$itemHeader.Image = (Новый-Значок 16)
-$itemHeader.Font = Шрифт 9.5 $true
-$menu.Items.Add('-') | Out-Null
-$itemStatus = $menu.Items.Add('Состояние')
-$itemStatus.Enabled = $false
-$menu.Items.Add('-') | Out-Null
-$itemExit = $menu.Items.Add('Закрыть')
-$ni.ContextMenuStrip = $menu
+# Меню Windows не используется: место оно выбирает верно, но вид у него чужой —
+# светлое меню посреди тёмного приложения читается как всплывшее окно другой
+# программы, и состояния в нём не видно. Вместо него своя плашка (`Новая-Плашка`
+# в оболочке): состояние словом и цветом, шапка открывает окно, под ней тумблер
+# и выход. Место плашки считает общая механика `C:\AI\scripts	ray-place.ps1` —
+# плашка выходит из панели задач с той стороны, где та реально стоит.
+#
 # Пункта «Настройки» нет потому, что настроек у приложения нет: раскладка экранов
 # живёт в screens.conf, а адрес Deck'а не настраивается вовсе — он находится сам.
-# Тумблер в меню тоже отсутствует: канон уводит действия в окно, где рядом видно,
-# что именно произойдёт.
+$script:Плашка = $null
+
+function Показать-Плашку {
+    # Повторное нажатие по значку ЗАКРЫВАЕТ плашку, а не поднимает вторую.
+    if ($script:Плашка -and -not $script:Плашка.IsDisposed) {
+        try { $script:Плашка.Close() } catch { }
+        $script:Плашка = $null
+        return
+    }
+    # Состояние спрашивается у системы в момент открытия плашки, а не берётся из
+    # того, что было нарисовано минуту назад.
+    $работает = Test-ServerRunning
+    $подключён = $работает -and (Test-DeckConnected)
+    if ($подключён) { $слово = 'Работает — Deck подключён'; $цвет = $C.Успех }
+    elseif ($работает) { $слово = 'Включено — ждём Deck'; $цвет = $C.Акцент }
+    else { $слово = 'Выключено'; $цвет = $C.Тусклый }
+    if ($работает) { $тумблер = 'Выключить'; $цветТумблера = $C.Тревога }
+    else { $тумблер = 'Включить'; $цветТумблера = $C.Акцент }
+
+    $п = Новая-Плашка -Состояние $слово -ЦветСостояния $цвет `
+                      -ТекстТумблера $тумблер -ЦветТумблера $цветТумблера
+    $ф = $п.Форма
+    $script:Плашка = $ф
+    $открыть = { try { $script:Плашка.Close() } catch { }; Show-Window }
+    $п.Шапка.Add_Click($открыть)
+    # Щелчок по надписи до панели под ней не доходит: надпись — свой контрол и
+    # событие съедает. Без этого шапка открывала бы окно только по пустому месту.
+    foreach ($н in $п.Надписи) { $н.Add_Click($открыть) }
+    $п.Тумблер.Add_Click({ try { $script:Плашка.Close() } catch { }; Switch-Server })
+    $п.Выход.Add_Click({ try { $script:Плашка.Close() } catch { }; Выйти-Из-Приложения })
+    $ф.Add_Deactivate({ try { $this.Close() } catch { } })
+    $ф.Show()
+    $ф.Activate()
+}
 
 # ==== Обновление вида ========================================================
 function Update-View {
@@ -331,14 +458,12 @@ function Update-View {
     $ui.Факты['Переход'].Text = 'правый край экрана · Win+Shift+D'
     (Кнопка 'Забыть Deck').Enabled = [bool]$script:Pair.deck_id
 
-    $ni.Icon = Значок-Приложения
+    $ni.Icon = Значок-Трея
     $ni.Text = if ($подключён) { 'Общая клавиатура и мышь — Deck подключён' }
                elseif ($работает) { 'Общая клавиатура и мышь — ждём Deck' }
                else { 'Общая клавиатура и мышь — выключено' }
-    # Состояние в меню — слово, а не кружок: цвет читают только те, кто его различает.
-    $itemStatus.Text = if ($подключён) { 'Состояние: работает, Deck подключён' }
-                       elseif ($работает) { 'Состояние: включено, ждём Deck' }
-                       else { 'Состояние: выключено' }
+    # Состояние плашки не обновляется по часам: плашка живёт секунды и собирается
+    # заново на каждое нажатие, спрашивая состояние у системы в этот момент.
 }
 
 function Switch-Server {
@@ -375,11 +500,15 @@ function Кнопка([string]$Имя) {
 }
 
 $ui.Тумблер.Add_Click({ Switch-Server })
-$itemHeader.Add_Click({ Show-Window })
 $ni.Add_MouseDoubleClick({ Show-Window })
-# Состояние в меню спрашивается у системы в момент ОТКРЫТИЯ меню, а не берётся
-# из того, что было нарисовано минуту назад.
-$menu.Add_Opening({ Update-View })
+# ЛКМ — окно, ПКМ — плашка. Оба поднимаются на MouseUp: меню Windows открывалось
+# бы на нём же, и своя плашка обязана отзываться так же, иначе нажатие ощущается
+# запоздавшим.
+$ni.Add_MouseUp({
+    param($s, $e)
+    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) { Показать-Плашку }
+    elseif ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Window }
+})
 
 (Кнопка 'Журнал').Add_Click({
     try {
@@ -418,29 +547,48 @@ $menu.Add_Opening({ Update-View })
     }
 })
 
-(Кнопка 'В трей').Add_Click({
-    $form.Hide()
-    $ni.ShowBalloonTip(2500, 'Общая клавиатура и мышь', 'Приложение работает. Двойной клик по значку — открыть окно.', 'Info')
-})
-
 # Application::Exit() закрывает форму повторно, и обработчик входит сам в себя —
 # отсюда флаг: выход выполняется ровно один раз.
+# КРЕСТИК СВОРАЧИВАЕТ В ТРЕЙ, А НЕ ВЫХОДИТ. Приложение живёт фоном: пока сервер
+# включён, Deck подключён, и закрытие окна оборвало бы связь посреди работы —
+# человек же закрывал окно, а не выключал клавиатуру. Выход остаётся один и
+# явный: пункт «Закрыть» в меню значка. Отдельная кнопка «в трей» из окна ушла:
+# крестик и есть эта кнопка, а две кнопки на одно действие — лишняя развилка.
 $script:Quitting = $false
 $form.Add_FormClosing({
     param($s, $e)
-    if ($script:Quitting) { return }
-    $script:Quitting = $true
-    if ($e.CloseReason -eq [System.Windows.Forms.CloseReason]::UserClosing) {
-        Stop-Server
-        Send-Beacon $false
+    # Решение принимается по СВОЕМУ флагу, а не по CloseReason от системы.
+    # Замер 12.09.2026: закрытие окна приходило с причиной, отличной от
+    # UserClosing, и ветка «свернуть» не срабатывала — приложение выходило,
+    # обрывая связь с Deck'ом. Признак, который ставит сама программа, врать
+    # не может; выключение Windows остаётся единственным чужим исключением.
+    $этоВыключениеСистемы = ($e.CloseReason -eq [System.Windows.Forms.CloseReason]::WindowsShutDown)
+    if (-not $script:Quitting -and -not $этоВыключениеСистемы) {
+        # Молча. Всплывающее уведомление на каждое сворачивание — шум: человек
+        # сам нажал крестик и знает, что сделал. Уведомление уместно тогда,
+        # когда происходит то, чего человек не делал.
+        $e.Cancel = $true
+        $form.Hide()
+        Write-Log 'окно свёрнуто в трей, приложение работает'
+        return
     }
+    $script:Quitting = $true
     $timer.Stop()
     $ni.Visible = $false
     Write-Log '=== выход ==='
     [System.Windows.Forms.Application]::Exit()
 })
 
-$itemExit.Add_Click({ $form.Close() })
+function Выйти-Из-Приложения {
+    # Выход — единственное место, где сервер останавливается вместе с окном.
+    Stop-Server
+    Send-Beacon $false
+    $script:Quitting = $true
+    $timer.Stop()
+    $ni.Visible = $false
+    Write-Log '=== выход ==='
+    [System.Windows.Forms.Application]::Exit()
+}
 
 # ==== Часы приложения ========================================================
 # Один таймер на всё: рассылка маячка, разбор ответов Deck'а, сверка вида с фактом.
@@ -465,6 +613,7 @@ $timer.Add_Tick({
     }
 })
 
+Ensure-Config
 Open-Beacon
 Update-View
 $timer.Start()
