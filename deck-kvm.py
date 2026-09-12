@@ -303,12 +303,103 @@ def detect_screen():
     return best or (1280, 800)
 
 
+BEACON_PORT = 24801
+PROTOCOL = "DECKKVM1"
+CACHE_PATH = "/var/lib/deck-kvm/last-server"
+
+
+class Discovery:
+    """Знакомство по локальной сети: ПК вещает, Deck слышит и отвечает.
+
+    Порядок именно такой, а не обратный. Если бы искал Deck, а отвечал ПК,
+    Windows потребовал бы входящего правила брандмауэра на порт поиска — то есть
+    прав администратора при установке. Исходящая рассылка с ПК правила не требует,
+    а одиночный ответ Deck'а Windows пропускает как ответ на собственную рассылку.
+
+    Адрес ПК берётся из ЗАГОЛОВКА полученного пакета, а не из его текста: так
+    смена адреса в роутере ничего не ломает и настраивать нечего вовсе.
+    """
+
+    def __init__(self, name, log):
+        self.name = name
+        self.log = log
+        self.address = None
+        self.port = 24800
+        self.server_on = False
+        self.seen = 0.0
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.sock.bind(("", BEACON_PORT))
+        self.sock.setblocking(False)
+
+    def poll(self):
+        """Разобрать всё, что накопилось, и ответить. Не блокирует."""
+        while True:
+            try:
+                data, sender = self.sock.recvfrom(1024)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                return
+            parts = data.decode("utf-8", "replace").split()
+            if len(parts) < 3 or parts[0] != PROTOCOL or parts[1] != "SERVER":
+                continue
+            if sender[0] != self.address:
+                self.log("найден компьютер %s (%s)" % (sender[0], parts[2]))
+                self.remember(sender[0])
+            self.address = sender[0]
+            self.seen = time.monotonic()
+            try:
+                self.port = int(parts[3])
+            except (IndexError, ValueError):
+                pass
+            self.server_on = (len(parts) < 5) or (parts[4] == "on")
+            # Ответ идёт ровно туда, откуда пришёл маячок — в адрес И порт отправителя,
+            # а не на BEACON_PORT. Порт у ПК временный, и именно на него брандмауэр
+            # Windows пропускает ответ как продолжение своей же рассылки.
+            reply = "%s DECK %s" % (PROTOCOL, self.name)
+            try:
+                self.sock.sendto(reply.encode("utf-8"), sender)
+            except OSError:
+                pass
+
+    def wait(self, timeout):
+        """Подождать рассылку не дольше timeout секунд и разобрать её."""
+        try:
+            ready = selectors.DefaultSelector()
+            ready.register(self.sock, selectors.EVENT_READ)
+            ready.select(timeout=timeout)
+            ready.close()
+        except OSError:
+            time.sleep(timeout)
+        self.poll()
+
+    def remember(self, address):
+        """Запомнить адрес, чтобы следующее включение не ждало рассылки."""
+        try:
+            os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+            with open(CACHE_PATH, "w", encoding="utf-8") as fh:
+                fh.write(address + "\n")
+        except OSError:
+            pass
+
+    @staticmethod
+    def recall():
+        try:
+            with open(CACHE_PATH, encoding="utf-8") as fh:
+                return fh.read().strip() or None
+        except OSError:
+            return None
+
+
 class DeckKVM:
-    def __init__(self, hosts, port, name, log, pointer="abs"):
+    def __init__(self, hosts, port, name, log, pointer="abs", discovery=None):
         if isinstance(hosts, str):
             hosts = [hosts]
         self.hosts = [h.strip() for h in hosts if h.strip()]
-        self.host = self.hosts[0]
+        self.discovery = discovery
+        self.host = self.hosts[0] if self.hosts else None
         self.port, self.name, self.log = port, name, log
         self.pointer = pointer
         self.width, self.height = detect_screen()
@@ -516,6 +607,10 @@ class DeckKVM:
         last_seen = time.monotonic()
         try:
             while True:
+                # Отвечать на рассылку надо и во время сеанса: иначе окно на ПК
+                # через пятнадцать секунд напишет, что Deck пропал.
+                if self.discovery:
+                    self.discovery.poll()
                 if not sel.select(timeout=1.0):
                     if time.monotonic() - last_seen > 12:
                         raise ConnectionResetError("сервер молчит 12 секунд")
@@ -549,11 +644,36 @@ class DeckKVM:
     # и разгонять задержку повторов заново незачем.
     STABLE_SESSION_SECONDS = 30
 
+    def pick_host(self, index):
+        """Куда стучаться сейчас. Живая рассылка старше и настройки, и памяти."""
+        if self.discovery:
+            self.discovery.poll()
+            fresh = time.monotonic() - self.discovery.seen < 15
+            if self.discovery.address and fresh:
+                if not self.discovery.server_on:
+                    return None          # компьютер рядом, но выключен — не долбимся
+                self.port = self.discovery.port
+                return self.discovery.address
+        if self.hosts:
+            return self.hosts[index % len(self.hosts)]
+        if self.discovery:
+            return Discovery.recall()
+        return None
+
     def run(self):
         delay = 1
         index = 0
         while True:
-            self.host = self.hosts[index % len(self.hosts)]
+            target = self.pick_host(index)
+            if target is None:
+                # Адреса нет: либо ещё не слышали компьютер, либо он выключен.
+                # Ждать рассылку дешевле, чем стучаться в пустоту.
+                if self.discovery:
+                    self.discovery.wait(3)
+                else:
+                    time.sleep(3)
+                continue
+            self.host = target
             started = time.monotonic()
             try:
                 self.session()
@@ -604,12 +724,10 @@ def main():
         pointer = "abs"
     if len(sys.argv) > 1:
         host = sys.argv[1]
-    if not host:
-        print("не задан адрес ноутбука: укажите его в /etc/deck-kvm.conf "
-              "строкой server=<IP или имя вашего компьютера>, например "
-              "server=192.168.1.50", file=sys.stderr)
-        return 2
-    hosts = [h for h in host.split(",") if h.strip()]
+    # «auto» и пустая строка значат одно: адрес не задан руками, ищем по сети.
+    if host and host.strip().lower() == "auto":
+        host = ""
+    hosts = [h for h in (host or "").split(",") if h.strip()]
 
     def log(text):
         print("[deck-kvm] %s" % text, flush=True)
@@ -621,11 +739,22 @@ def main():
               file=sys.stderr)
         return 3
 
-    kvm = DeckKVM(hosts, port, name, log, pointer=pointer)
-    log("экран %dx%d, указатель %s, ждём ноутбук %s"
+    try:
+        discovery = Discovery(name, log)
+    except OSError as err:
+        discovery = None
+        log("поиск по сети недоступен (%s) — работаем по адресу из настроек" % err)
+
+    kvm = DeckKVM(hosts, port, name, log, pointer=pointer, discovery=discovery)
+    if hosts:
+        where = "адрес из настроек: " + ", ".join(hosts)
+    elif discovery and Discovery.recall():
+        where = "запомненный компьютер %s, слушаем сеть" % Discovery.recall()
+    else:
+        where = "адрес не задан — ищем компьютер по сети"
+    log("экран %dx%d, указатель %s, %s"
         % (kvm.width, kvm.height,
-           "абсолютный" if pointer == "abs" else "относительный",
-           ", ".join(hosts)))
+           "абсолютный" if pointer == "abs" else "относительный", where))
     try:
         kvm.run()
     except KeyboardInterrupt:

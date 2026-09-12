@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Установка общей клавиатуры и мыши на Steam Deck.
 # Запускать НА ДЕКЕ, в Desktop Mode, из Konsole:
-#     bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh <адрес-или-IP-ноутбука>[,запасной-адрес]
+#     bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh
 #
-# Пример:
+# Адрес компьютера указывать не нужно — Deck находит его по сети сам.
+# Аргумент нужен только там, где рассылка не проходит:
 #     bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh 192.168.0.14
 set -euo pipefail
 
@@ -11,18 +12,18 @@ SCREEN_NAME="steamdeck"   # это имя должно совпадать с scr
 PORT="24800"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER="${1:-}"
-
-if [ -z "$SERVER" ]; then
-	echo "Нужен адрес ноутбука первым аргументом — IP или сетевое имя," >&2
-	echo "можно несколько через запятую (пробуются по очереди)." >&2
-	echo "Пример:  bash install-on-deck.sh 192.168.1.50" >&2
-	exit 1
-fi
+# Адрес компьютера указывать не нужно: клиент слышит его рассылку по сети и
+# запоминает сам. Аргумент оставлен на случай, когда рассылка не проходит —
+# гостевая сеть Wi-Fi с изоляцией клиентов, разные подсети, VPN на компьютере.
+SERVER="${1:-auto}"
 
 echo
 echo "=== Общая клавиатура и мышь для Steam Deck ==="
-echo "Ноутбук:    $SERVER"
+if [ "$SERVER" = "auto" ]; then
+	echo "Компьютер:  ищется по сети сам"
+else
+	echo "Компьютер:  $SERVER"
+fi
 echo "Имя экрана: $SCREEN_NAME"
 echo
 
@@ -51,7 +52,7 @@ fi
 sudo install -d -m 0755 /var/lib/deck-kvm
 sudo install -m 0755 "$HERE/deck-kvm.py" /var/lib/deck-kvm/deck-kvm.py
 
-printf 'server=%s\nport=%s\nname=%s\n# pointer=abs — положение задаётся абсолютными осями (ускорение на него не влияет)\n# pointer=rel — запасной путь, положение задаётся смещениями\npointer=abs\n' \
+printf '# server=auto — адрес компьютера берётся из его рассылки по сети\nserver=%s\nport=%s\nname=%s\n# pointer=abs — положение задаётся абсолютными осями (ускорение на него не влияет)\n# pointer=rel — запасной путь, положение задаётся смещениями\npointer=abs\n' \
 	"$SERVER" "$PORT" "$SCREEN_NAME" \
 	| sudo tee /etc/deck-kvm.conf >/dev/null
 sudo chmod 0644 /etc/deck-kvm.conf

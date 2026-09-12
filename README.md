@@ -29,9 +29,10 @@ absence — becomes irrelevant.
 
 | Piece | Role |
 | --- | --- |
-| Windows side | [Deskflow](https://github.com/deskflow/deskflow) server (Barrier/Synergy protocol), plus a system-tray toggle app |
+| Windows side | [Deskflow](https://github.com/deskflow/deskflow) server (Barrier/Synergy protocol), plus a one-button window to toggle it |
 | `deck-kvm.py` | The Deck-side client — pure Python 3 standard library, no dependencies |
-| `SteamDeck-KVM.ps1` | Windows tray icon: click to start/stop the server |
+| `SteamDeck-KVM.ps1` | Windows window: one Start/Stop button and the live state of the link |
+| LAN discovery | The PC beacons "I'm here"; the Deck hears it and connects on its own — no address to configure |
 | `install-on-deck.sh` | One-shot installer: systemd service, `uinput` module, config file |
 | `verify_kernel.py` | Sanity check on the real kernel: creates devices, reads events back |
 | `verify_protocol.py` | Sanity check of the wire protocol against a real Deskflow server |
@@ -61,10 +62,11 @@ section: links
 end
 ```
 
-Run `SteamDeck-KVM.ps1` (or double-click a shortcut pointing at it) — it sits
-in the system tray; click it to start/stop the server. See
-[SteamDeck-KVM.ps1](SteamDeck-KVM.ps1) for what it wires up (single-instance
-guard, colored tray icon, no console window).
+Run the **SteamDeck-KVM** shortcut in the folder root (a copy sits on the
+Desktop). A window opens with one button: **Start** brings the server up,
+**Stop** takes it down. The window also shows whether the Deck has been found
+and whether it is connected. **Minimize to tray** leaves it running as an icon;
+closing the window stops the server.
 
 ### 2. Steam Deck
 
@@ -72,11 +74,13 @@ guard, colored tray icon, no console window).
 2. Switch to Desktop Mode, open **Konsole**, run:
 
    ```bash
-   bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh <your-pc's-IP-or-hostname>
+   bash ~/Desktop/SteamDeck-KVM/install-on-deck.sh
    ```
 
-   Example: `bash install-on-deck.sh 192.168.1.50`. You can pass a
-   comma-separated fallback list: `192.168.1.50,my-pc.local`.
+   No address needed: the Deck hears the PC's beacon on the LAN and remembers
+   it. Pass an address only where broadcast doesn't get through — guest Wi-Fi
+   with client isolation, separate subnets, a full-tunnel VPN on the PC:
+   `bash install-on-deck.sh 192.168.1.50`.
 3. If the Deck asks for a password you've never set, run `passwd` first, then
    repeat step 2.
 
@@ -86,12 +90,14 @@ Done. The client comes up as a `systemd` service on every boot, in every mode.
 
 | Action | How |
 | --- | --- |
-| Start/stop the server | Click the tray icon on Windows (left-click toggles; right-click for a menu) |
+| Get going | Power on the Deck, open the window on the PC, press **Start** — the link comes up by itself |
+| Stop | Press **Stop** in the same window — the Deck disconnects |
 | Move to the Deck | Push the mouse cursor to the shared screen edge and hold it there |
 | Jump to the Deck instantly | **Win+Shift+D** (or whatever hotkey you set in `screens.conf`) |
 | Jump back | **Win+Shift+W**, or the opposite screen edge |
-| View the Windows-side log | Right-click the tray icon → **Open log** |
-| Fully quit | Right-click the tray icon → **Exit** (stops the server too) |
+| View the Windows-side log | The **Log** button in the window |
+| Keep it running without the window | **Minimize to tray**; double-click the icon to bring the window back |
+| Fully quit | Close the window — the server stops with it |
 
 ## What this does *not* do
 
@@ -105,14 +111,20 @@ Done. The client comes up as a `systemd` service on every boot, in every mode.
 ## Configuration
 
 **Deck is on the left, not the right.** Swap `right`/`left` in your
-`screens.conf` on the Windows side, then restart the tray app's server.
+`screens.conf` on the Windows side, then restart the server from the window.
 
-**The PC's address changed.** Edit `/etc/deck-kvm.conf` on the Deck:
+**The PC's address changed.** Nothing to do — the address comes from the
+beacon, not from a config file. A hand-set address is edited where it was set:
 
 ```bash
-sudo nano /etc/deck-kvm.conf
+sudo nano /etc/deck-kvm.conf   # server=auto — discover over the LAN
 sudo systemctl restart deck-kvm
 ```
+
+**The Deck doesn't find the PC.** Both machines must be on the SAME Wi-Fi, and
+that network must not isolate clients from each other (guest networks always
+do). A full-tunnel VPN on the PC can also swallow the beacon. Either way, set
+the address by hand: `server=192.168.1.50` in `/etc/deck-kvm.conf`.
 
 **Cursor jumps around or lands in the wrong spot.** Switch to relative
 pointer mode: set `pointer=rel` in `/etc/deck-kvm.conf`, then
@@ -160,7 +172,7 @@ Deck-side log:
 journalctl -u deck-kvm -f
 ```
 
-Windows-side log: right-click the tray icon → **Open log**, or open
+Windows-side log: the **Log** button in the window, or open
 `%LOCALAPPDATA%\SteamDeck-KVM\tray.log` directly.
 
 ## How it works
@@ -174,10 +186,12 @@ Synergy family): it decodes those events and replays them through
 relative axes (in-game look/aim once the cursor is captured); the keyboard
 supports press, release, and OS-level key repeat.
 
-Addressing is a plain TCP connection, not network discovery — the Deck client
-dials out to whatever address you put in `/etc/deck-kvm.conf`; the server
-just listens on its port and accepts whichever client's screen name matches
-its config. This only works on one local network; the connection is
+The input link itself is a plain TCP connection; discovery is a separate UDP
+beacon on port 24801. The PC broadcasts its name, port and on/off state every
+two seconds; the Deck answers with one packet and takes the PC's address from
+that packet's header, then dials the TCP port. The PC beacons and the Deck
+listens, rather than the reverse, because the reverse would need an inbound
+Windows Firewall rule — that is, administrator rights at install time. This only works on one local network; the connection is
 **unencrypted** — don't run it across anything but a trusted LAN.
 
 ## Uninstall (Deck side)
