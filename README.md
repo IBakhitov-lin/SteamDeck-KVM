@@ -32,7 +32,10 @@ absence — becomes irrelevant.
 | Windows side | [Deskflow](https://github.com/deskflow/deskflow) server (Barrier/Synergy protocol), plus a one-button window to toggle it |
 | `deck-kvm.py` | The Deck-side client — pure Python 3 standard library, no dependencies |
 | `SteamDeck-KVM.ps1` | Windows window: one Start/Stop button and the live state of the link |
-| LAN discovery | The PC beacons "I'm here"; the Deck hears it and connects on its own — no address to configure |
+| LAN pairing | The PC beacons "I'm here"; the Deck hears it and connects on its own, and the two remember each other by a permanent device id rather than an address |
+| `app-window.ps1` | Window shell: palette, typeface and corner radii from the shared contract |
+| `make-shortcuts.ps1` | Builds the icon and both launch shortcuts |
+| `check-window-layout.ps1` | Layout guard: nothing runs off an edge or lands on top of a neighbour |
 | `install-on-deck.sh` | One-shot installer: systemd service, `uinput` module, config file |
 | `verify_kernel.py` | Sanity check on the real kernel: creates devices, reads events back |
 | `verify_protocol.py` | Sanity check of the wire protocol against a real Deskflow server |
@@ -62,11 +65,16 @@ section: links
 end
 ```
 
-Run the **SteamDeck-KVM** shortcut in the folder root (a copy sits on the
-Desktop). A window opens with one button: **Start** brings the server up,
-**Stop** takes it down. The window also shows whether the Deck has been found
-and whether it is connected. **Minimize to tray** leaves it running as an icon;
-closing the window stops the server.
+Build the shortcuts once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File make-shortcuts.ps1
+```
+
+That puts a shortcut in the folder root and a copy on the Desktop. A window
+opens with one button: **Start** brings the server up, **Stop** takes it down.
+The window also shows whether the Deck is known and whether it is connected.
+**To tray** leaves it running as an icon; closing the window stops the server.
 
 ### 2. Steam Deck
 
@@ -186,12 +194,20 @@ Synergy family): it decodes those events and replays them through
 relative axes (in-game look/aim once the cursor is captured); the keyboard
 supports press, release, and OS-level key repeat.
 
-The input link itself is a plain TCP connection; discovery is a separate UDP
-beacon on port 24801. The PC broadcasts its name, port and on/off state every
-two seconds; the Deck answers with one packet and takes the PC's address from
-that packet's header, then dials the TCP port. The PC beacons and the Deck
-listens, rather than the reverse, because the reverse would need an inbound
-Windows Firewall rule — that is, administrator rights at install time. This only works on one local network; the connection is
+The input link itself is a plain TCP connection; pairing is a separate UDP
+beacon on port 24801. Each side mints a permanent device id on first run (the
+PC in `pair.json`, the Deck in `/var/lib/deck-kvm/identity`). The PC broadcasts
+its id, name, port and on/off state every two seconds; the Deck answers with one
+packet carrying its own id and takes the PC's address from that packet's header,
+then dials the TCP port. The first exchange is the pairing — each side records
+the other's id.
+
+After that the pair rides on the id, not the address: a new router, a different
+network, a phone hotspot, all fine, because the address is re-read from every
+packet. Another Deck on the same LAN never silently replaces the paired one.
+The PC beacons and the Deck listens, rather than the reverse, because the
+reverse would need an inbound Windows Firewall rule — that is, administrator
+rights at install time. This only works on one local network; the connection is
 **unencrypted** — don't run it across anything but a trusted LAN.
 
 ## Uninstall (Deck side)

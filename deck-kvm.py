@@ -18,6 +18,7 @@ import socket
 import struct
 import sys
 import time
+import uuid
 
 # --------------------------------------------------------------------------
 # Слой 1. Виртуальные устройства ядра (uinput)
@@ -304,8 +305,43 @@ def detect_screen():
 
 
 BEACON_PORT = 24801
-PROTOCOL = "DECKKVM1"
-CACHE_PATH = "/var/lib/deck-kvm/last-server"
+PROTOCOL = "DECKKVM2"
+STATE_DIR = "/var/lib/deck-kvm"
+IDENTITY_PATH = os.path.join(STATE_DIR, "identity")
+PAIR_PATH = os.path.join(STATE_DIR, "pair")
+CACHE_PATH = os.path.join(STATE_DIR, "last-server")
+
+
+def _read_line(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
+def _write_line(path, value):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(value + "\n")
+    except OSError:
+        pass
+
+
+def device_id():
+    """Постоянный номер этого Deck'а — заводится один раз и живёт вечно.
+
+    Пара держится на НОМЕРЕ, а не на адресе. Адрес меняется при каждой смене
+    сети — номер не меняется никогда, поэтому знакомство переживает и переезд,
+    и смену роутера, и раздачу с телефона.
+    """
+    saved = _read_line(IDENTITY_PATH)
+    if saved:
+        return saved
+    fresh = uuid.uuid4().hex
+    _write_line(IDENTITY_PATH, fresh)
+    return fresh
 
 
 class Discovery:
@@ -323,6 +359,8 @@ class Discovery:
     def __init__(self, name, log):
         self.name = name
         self.log = log
+        self.id = device_id()
+        self.peer = _read_line(PAIR_PATH)   # номер своего ПК, если уже знакомы
         self.address = None
         self.port = 24800
         self.server_on = False
@@ -343,22 +381,37 @@ class Discovery:
             except OSError:
                 return
             parts = data.decode("utf-8", "replace").split()
-            if len(parts) < 3 or parts[0] != PROTOCOL or parts[1] != "SERVER":
+            # PROTOCOL SERVER <номер ПК> <имя> <порт> <on|off> <номер знакомого Deck'а|->
+            if len(parts) < 6 or parts[0] != PROTOCOL or parts[1] != "SERVER":
                 continue
+            pc_id, pc_name = parts[2], parts[3]
+            pc_knows = parts[6] if len(parts) > 6 else "-"
+
+            if self.peer and self.peer != pc_id:
+                continue                      # чужой компьютер — молча мимо
+            if not self.peer and pc_knows not in ("-", self.id):
+                continue                      # этот ПК уже занят другим Deck'ом
+            if not self.peer:
+                self.peer = pc_id
+                _write_line(PAIR_PATH, pc_id)
+                self.log("знакомство: компьютер «%s» номер %s, адрес %s"
+                         % (pc_name, pc_id, sender[0]))
+
             if sender[0] != self.address:
-                self.log("найден компьютер %s (%s)" % (sender[0], parts[2]))
+                if self.address:
+                    self.log("свой компьютер сменил адрес: %s" % sender[0])
                 self.remember(sender[0])
             self.address = sender[0]
             self.seen = time.monotonic()
             try:
-                self.port = int(parts[3])
-            except (IndexError, ValueError):
+                self.port = int(parts[4])
+            except ValueError:
                 pass
-            self.server_on = (len(parts) < 5) or (parts[4] == "on")
+            self.server_on = parts[5] == "on"
             # Ответ идёт ровно туда, откуда пришёл маячок — в адрес И порт отправителя,
             # а не на BEACON_PORT. Порт у ПК временный, и именно на него брандмауэр
             # Windows пропускает ответ как продолжение своей же рассылки.
-            reply = "%s DECK %s" % (PROTOCOL, self.name)
+            reply = "%s DECK %s %s" % (PROTOCOL, self.id, self.name)
             try:
                 self.sock.sendto(reply.encode("utf-8"), sender)
             except OSError:
@@ -375,22 +428,22 @@ class Discovery:
             time.sleep(timeout)
         self.poll()
 
+    def forget(self):
+        """Забыть компьютер — следующий откликнувшийся станет новым."""
+        self.peer = None
+        for path in (PAIR_PATH, CACHE_PATH):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     def remember(self, address):
         """Запомнить адрес, чтобы следующее включение не ждало рассылки."""
-        try:
-            os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
-            with open(CACHE_PATH, "w", encoding="utf-8") as fh:
-                fh.write(address + "\n")
-        except OSError:
-            pass
+        _write_line(CACHE_PATH, address)
 
     @staticmethod
     def recall():
-        try:
-            with open(CACHE_PATH, encoding="utf-8") as fh:
-                return fh.read().strip() or None
-        except OSError:
-            return None
+        return _read_line(CACHE_PATH)
 
 
 class DeckKVM:
@@ -748,10 +801,11 @@ def main():
     kvm = DeckKVM(hosts, port, name, log, pointer=pointer, discovery=discovery)
     if hosts:
         where = "адрес из настроек: " + ", ".join(hosts)
-    elif discovery and Discovery.recall():
-        where = "запомненный компьютер %s, слушаем сеть" % Discovery.recall()
+    elif discovery and discovery.peer:
+        where = ("знаком с компьютером %s, последний адрес %s"
+                 % (discovery.peer, Discovery.recall() or "неизвестен"))
     else:
-        where = "адрес не задан — ищем компьютер по сети"
+        where = "знакомых компьютеров нет — ждём, кто отзовётся в сети"
     log("экран %dx%d, указатель %s, %s"
         % (kvm.width, kvm.height,
            "абсолютный" if pointer == "abs" else "относительный", where))
