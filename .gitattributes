@@ -1,2 +1,8 @@
+# Файлы, которые исполняет Linux на Steam Deck, хранятся с переводом строки Linux:
+# скрипт с CRLF падает на первой строке («bad interpreter»), а ярлык .desktop не читается.
 *.sh text eol=lf
 *.py text eol=lf
+*.desktop text eol=lf
+*.service text eol=lf
+*.qml text eol=lf
+.githooks/* text eol=lf

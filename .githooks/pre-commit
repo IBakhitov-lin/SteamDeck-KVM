@@ -1,0 +1,36 @@
+#!/bin/sh
+# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Хук на коммит SteamDeck-KVM: архитектура, утечки в публичный репозиторий, окно
+#
+# Только дешёвое — секунды: архитектурные сторожа, проверка на утечку приватного и сторож окна,
+# если тронуто окно. Тесты поведения идут на выгрузку (pre-push). Обход `git commit --no-verify`
+# законен ровно тогда, когда коммит спасает работу посреди правки.
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+# Интерпретатор с pytest — локальная настройка репозитория, в историю не попадает:
+#   git config steamdeck-kvm.python "C:/путь/к/python.exe"
+PY=$(git config --get steamdeck-kvm.python || true)
+[ -n "$PY" ] && [ -x "$PY" ] || PY=$(command -v python3 || command -v python || echo python)
+
+echo "== SteamDeck-KVM pre-commit: архитектура"
+"$PY" -X utf8 -m pytest "$ROOT/tests/architecture" -q -x -p no:cacheprovider || {
+    echo "КОММИТ ОТКЛОНЁН: архитектурные сторожа красные."
+    exit 1
+}
+
+# Репозиторий публичный: приватное не попадает в индекс. Сторож общий на все репозитории
+# автора; у стороннего разработчика его нет, и проверка молча пропускается — у него нечему течь.
+if [ -f "C:/AI/scripts/check-github-repo.py" ]; then
+    echo "== SteamDeck-KVM pre-commit: приватное в индексе"
+    "$PY" -X utf8 "C:/AI/scripts/check-github-repo.py" --корень "$ROOT" --индекс || {
+        echo "КОММИТ ОТКЛОНЁН: в индексе приватное — список выше."
+        exit 1
+    }
+fi
+
+if git diff --cached --name-only | grep -q "^apps/pc/"; then
+    echo "== тронуто приложение ПК: компоновка окна"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$ROOT/private_tools/scripts/check_window_layout_script.ps1" || exit 1
+fi
+
+echo "== Коммит разрешён."

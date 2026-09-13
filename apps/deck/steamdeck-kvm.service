@@ -1,0 +1,15 @@
+# Служба пользователя SteamDeck-KVM. Установщик подставляет вместо @APP@ путь к текущей версии.
+# Служба пользователя, а не системы: поднимается при входе в сеанс — в игровом режиме и на рабочем
+# столе, — а доступ к виртуальным устройствам ввода SteamOS даёт активному пользователю сам.
+[Unit]
+Description=SteamDeck-KVM — keyboard and mouse from your PC
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @APP@/apps/deck/steamdeck_kvm_service.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,11 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Name=Install SteamDeck-KVM
+Name[ru]=Установить SteamDeck-KVM
+Comment=Download the latest SteamDeck-KVM and install it on this Steam Deck
+Comment[ru]=Скачать последнюю версию SteamDeck-KVM и установить на этот Steam Deck
+Exec=sh -c 'rm -f /tmp/steamdeck-kvm-install.sh; if curl -f -S -s -L -o /tmp/steamdeck-kvm-install.sh --connect-timeout 60 https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/install.sh; then bash /tmp/steamdeck-kvm-install.sh; else echo "Could not download the installer. Check the Wi-Fi and try again. Press Enter to close."; read _; fi'
+Icon=system-software-install
+Terminal=true
+StartupNotify=false

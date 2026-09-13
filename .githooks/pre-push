@@ -1,0 +1,40 @@
+#!/bin/sh
+# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Хук на выгрузку SteamDeck-KVM: весь набор, окно, выпуск, правила публичного репозитория
+#
+# Порядок под быстрый отказ: архитектура → весь набор → окно → сверка собранного выпуска →
+# правила публичного репозитория. Обход `git push --no-verify` законен, когда выгружается сама
+# починка набора.
+set -e
+
+[ -f "C:/AI/scripts/pre-push-skip.sh" ] && . "C:/AI/scripts/pre-push-skip.sh"
+
+ROOT=$(git rev-parse --show-toplevel)
+# Интерпретатор с pytest — локальная настройка репозитория, в историю не попадает:
+#   git config steamdeck-kvm.python "C:/путь/к/python.exe"
+PY=$(git config --get steamdeck-kvm.python || true)
+[ -n "$PY" ] && [ -x "$PY" ] || PY=$(command -v python3 || command -v python || echo python)
+
+echo "== SteamDeck-KVM pre-push 1/4: архитектура"
+"$PY" -X utf8 -m pytest "$ROOT/tests/architecture" -q -x -p no:cacheprovider || exit 1
+
+echo "== SteamDeck-KVM pre-push 2/4: весь набор"
+"$PY" -X utf8 -m pytest "$ROOT/tests" -q -p no:cacheprovider || {  # весь набор: перед выгрузкой
+    echo "ВЫГРУЗКА ОТКЛОНЕНА: набор тестов красный."
+    exit 1
+}
+
+echo "== SteamDeck-KVM pre-push 3/4: окно приложения ПК"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$ROOT/private_tools/scripts/check_window_layout_script.ps1" || exit 1
+
+echo "== SteamDeck-KVM pre-push 4/4: правила публичного репозитория"
+if [ -f "C:/AI/scripts/check-github-repo.py" ]; then
+    "$PY" -X utf8 "C:/AI/scripts/check-github-repo.py" --корень "$ROOT" || {
+        echo "ВЫГРУЗКА ОТКЛОНЕНА: репозиторий расходится с C:/AI/github_canon.md."
+        exit 1
+    }
+fi
+if [ -d "$ROOT/dist" ]; then
+    "$PY" -X utf8 "$ROOT/private_tools/scripts/build_release_script.py" --проверить || exit 1
+fi
+
+echo "== Выгрузка разрешена."
