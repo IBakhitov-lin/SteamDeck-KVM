@@ -101,6 +101,28 @@ def uninstall(log, keep_state: bool):
     return True, "удаление началось — окно закроется, когда служба остановится"
 
 
+def run_installer(log):
+    """«Обновить» — запустить установщик последней версии ОТДЕЛЬНОЙ временной службой.
+
+    Установщик перезапускает эту же службу; порождённый ею процесс погиб бы вместе с ней, поэтому
+    он поднимается `systemd-run --user` в своей группе — так же, как удаление.
+    """
+    script = ROOT / "apps" / "deck" / "install.sh"
+    if not script.is_file():
+        return False, "не найден установщик %s" % script
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "steamdeck-kvm-install.sh"
+    try:
+        runtime.write_bytes(script.read_bytes())
+        subprocess.Popen(["systemd-run", "--user", "--collect", "--quiet",
+                          "--setenv=STEAMDECK_KVM_IN_TERMINAL=1", "--setenv=STEAMDECK_KVM_NO_PAUSE=1",
+                          "bash", str(runtime), "--latest"],
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as error:
+        return False, "установщик не запустился: %s" % error
+    log("запущен установщик последней версии — служба перезапустится сама")
+    return True, "обновление началось — окно переподключится, когда служба перезапустится"
+
+
 def serve() -> int:
     settings = read_settings()
 
@@ -142,18 +164,14 @@ def serve() -> int:
             time.sleep(config_policy.UPDATE_CHECK_SECONDS)
 
     def apply_update():
-        release = pending["release"] or updater.check()
-        if not release:
+        if not (pending["release"] or updater.check()):
             commander.set_status(updating=False, update_error="обновлений нет")
             return
         commander.set_status(updating=True, update_error=None)
-        try:
-            updater.apply(release)
-        except Exception as error:
-            commander.set_status(updating=False, update_error=str(error))
-            commander.log("обновление не удалось: %s" % error)
-            return
-        restart_self(commander.log)
+        started, message = run_installer(commander.log)
+        if not started:
+            commander.set_status(updating=False, update_error=message)
+            commander.log("обновление не удалось: %s" % message)
 
     def act(name):
         if name == "update":

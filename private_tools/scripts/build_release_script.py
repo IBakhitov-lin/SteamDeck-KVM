@@ -1,26 +1,19 @@
-# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Сборка выпуска SteamDeck-KVM: архив для ПК, архив для Steam Deck, контрольные суммы
+# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Сборка выпуска SteamDeck-KVM: установщик Windows и ярлык установки Steam Deck
 """
 build_release_script.py
 
-Выпуск собирается этим скриптом и никогда руками: архив, упакованный мышью, теряет права на
-запуск у файлов Deck'а, забывает копию палитры или берёт устаревшую копию общего модуля, и
-выясняется это у человека, скачавшего выпуск, а не здесь.
-
-Что получается в dist/:
-
-Имена — по шаблону `<Имя>-<X.Y.Z>-<платформа>-<архитектура>`, как у открытых проектов того же рода;
-файлы, которые скачивают по постоянной ссылке `releases/latest/download/<файл>`, — без версии.
+Выпуск собирается этим скриптом и никогда руками. Файлов у выпуска ДВА — по одному на
+платформу, и человек скачивает ровно один:
 
 1. `SteamDeck-KVM-<версия>-windows-x64-setup.exe` — установщик Windows (Inno Setup): ставит
-   приложение для текущего пользователя, ярлыки, запускает; им же приложение обновляется
-2. `SteamDeck-KVM-<версия>-steamos-x86_64.tar.gz` — установщик, удалятор и папка `app/` с
-   клиентом. Именно tar.gz, а не zip: только он хранит права на запуск
-3. `SteamDeck-KVM-Install.desktop` — ярлык «Установить» для Deck'а: скачивает `install.sh` из
-   последнего выпуска и запускает его
-4. `install.sh` — тот же установщик, что в архиве: без программы рядом он сам берёт архив
-   последнего выпуска и сверяет его с суммами
-5. `SHA256SUMS.txt` — контрольные суммы всех файлов; обновление и установщик без них не ставят
-6. `RELEASE_NOTES.md` — текст выпуска из `private_tools/releases/v<версия>.md`
+   приложение для текущего пользователя, заводит ярлыки и запускает; им же приложение обновляется
+2. `SteamDeck-KVM-Install.desktop` — ярлык установки для Steam Deck: скачивает установщик из
+   репозитория, а тот берёт программу из архива исходного кода последнего выпуска
+
+Архивы исходного кода GitHub прикладывает к каждому выпуску сам — из них Steam Deck и ставится,
+поэтому сборщик сверяет, что всё нужное Deck'у лежит в истории репозитория. Контрольную сумму
+каждого файла выпуска считает GitHub (поле `digest`), отдельный файл сумм не нужен.
+Третий файл `dist/RELEASE_NOTES.md` — текст выпуска для `gh release`, в выпуск не прикладывается.
 
 Копии общих файлов берутся из папки общих исходников В МОМЕНТ СБОРКИ, если она задана настройкой
 `steamdeck-kvm.shared-source`: копия, лежащая в репозитории месяцами, расходится с исходником
@@ -34,14 +27,11 @@ from __future__ import annotations
 
 import argparse
 import os
-import hashlib
-import io
 import json
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -219,94 +209,27 @@ def build_pc(version: str) -> tuple[Path, list[str]]:
     return setup, []
 
 
-def build_deck(version: str) -> Path:
-    name = "SteamDeck-KVM-%s-steamos-x86_64" % version
-    archive = DIST / (name + ".tar.gz")
-    deck = ROOT / "apps" / "deck"
-
-    def add(tar, source: Path | None, arcname: str, executable=False, data: bytes | None = None):
-        content = data if data is not None else source.read_bytes()
-        if arcname.endswith((".sh", ".py", ".desktop", ".service", ".qml")):
-            # Файлы Linux в архиве — с переводом строки Linux, независимо от настройки git на Windows.
-            content = content.replace(b"\r\n", b"\n")
-        info = tarfile.TarInfo("%s/%s" % (name, arcname))
-        info.size = len(content)
-        info.mode = 0o755 if executable else 0o644
-        info.mtime = int((ROOT / "VERSION").stat().st_mtime)
-        tar.addfile(info, io.BytesIO(content))
-
-    with tarfile.open(archive, "w:gz") as tar:
-        add(tar, deck / "install.sh", "install.sh", executable=True)
-        add(tar, deck / "uninstall.sh", "uninstall.sh", executable=True)
-        add(tar, ROOT / "LICENSE", "LICENSE")
-        for path in sorted((ROOT / "core").rglob("*")):
-            if path.is_file() and not _skip(path):
-                add(tar, path, "app/core/" + path.relative_to(ROOT / "core").as_posix())
-        for path in sorted(deck.rglob("*")):
-            if path.is_file() and not _skip(path):
-                add(tar, path, "app/apps/deck/" + path.relative_to(deck).as_posix(),
-                    executable=path.suffix == ".sh")
-        add(tar, ROOT / "apps" / "palette.json", "app/apps/palette.json")
-        add(tar, None, "app/VERSION", data=(version + "\n").encode())
-    return archive
+DECK_REQUIRED = ("apps/deck/install.sh", "apps/deck/uninstall.sh", "apps/deck/steamdeck_kvm_service.py",
+                 "apps/deck/steamdeck-kvm-app.qml", "apps/deck/steamdeck-kvm-app.sh", "apps/deck/steamdeck-kvm.service",
+                 "apps/deck/steamdeck-kvm.png", "apps/palette.json", "core/config_policy.py", "VERSION")
 
 
-def build_loose_files(desktop: Path, installer: Path) -> None:
-    """Ярлык и установщик для скачивания по постоянной ссылке — с переводом строки Linux."""
-    for source, target in ((ROOT / "apps" / "deck" / "SteamDeck-KVM-Install.desktop", desktop),
-                           (ROOT / "apps" / "deck" / "install.sh", installer)):
-        target.write_bytes(source.read_bytes().replace(b"\r\n", b"\n"))
-
-
-def write_sums(files: list[Path]) -> Path:
-    sums = DIST / "SHA256SUMS.txt"
-    lines = ["%s  %s" % (hashlib.sha256(path.read_bytes()).hexdigest(), path.name) for path in files]
-    sums.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-    return sums
-
-
-def verify(version: str, pc: Path, deck: Path, sums: Path, loose: list[Path]) -> list[str]:
-    """Сверить собранное с тем, что обещают установщик и обновление. Пустой список — чисто."""
+def verify(version: str, pc: Path, desktop: Path) -> list[str]:
+    """Сверить собранное с тем, что обещают установщики и обновление. Пустой список — чисто."""
     problems = []
     if not pc.is_file() or pc.read_bytes()[:2] != b"MZ":
         problems.append("установщик ПК %s не собран" % pc.name)
-    with tarfile.open(deck, "r:gz") as tar:
-        members = {member.name: member for member in tar.getmembers()}
-        prefix = "SteamDeck-KVM-%s-steamos-x86_64/" % version
-        for need, executable in (("install.sh", True),
-                                 ("uninstall.sh", True), ("app/VERSION", False),
-                                 ("app/apps/deck/steamdeck_kvm_service.py", False),
-                                 ("app/apps/deck/steamdeck-kvm-app.qml", False),
-                                 ("app/apps/deck/steamdeck-kvm-app.sh", True),
-                                 ("app/apps/deck/steamdeck-kvm.png", False),
-                                 ("app/core/commanders/deck_client_commander.py", False),
-                                 ("app/apps/palette.json", False)):
-            member = members.get(prefix + need)
-            if member is None:
-                problems.append("в архиве Deck'а нет %s" % need)
-            elif executable and not member.mode & 0o111:
-                problems.append("%s в архиве Deck'а без права на запуск" % need)
-        for name in members:
-            if "/tests/" in name or name.endswith(".pyc"):
-                problems.append("в архив Deck'а попало лишнее: %s" % name)
-    lines = sums.read_text(encoding="utf-8").splitlines()
-    for path in [pc, deck] + loose:
-        if not path.is_file():
-            problems.append("нет файла выпуска %s" % path.name)
-            continue
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if "%s  %s" % (digest, path.name) not in lines:
-            problems.append("сумма %s не совпадает с файлом" % path.name)
-    home = str(Path.home())
-    workspace = str(ROOT.parent)
-    markers = {home, home.replace("\\", "/"), workspace, workspace.replace("\\", "/")}
-    for archive in [deck] + [path for path in loose if path.is_file()]:
-        text = archive.read_bytes()
-        for marker in markers:
-            if marker and marker.encode("utf-8") in text:
-                problems.append("в %s попал путь машины сборки" % archive.name)
+    if not desktop.is_file() or b"raw.githubusercontent.com" not in desktop.read_bytes():
+        problems.append("ярлык установки Steam Deck не собран или не ведёт на установщик")
+    tracked = set(subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.split())
+    for need in DECK_REQUIRED:
+        if need not in tracked:
+            problems.append("в истории репозитория нет %s — архив исходного кода выпуска не поставит Deck" % need)
+    committed = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    if committed != version:
+        problems.append("VERSION %s расходится со сборкой %s" % (committed, version))
     return problems
-
 
 def main() -> int:
     try:
@@ -325,10 +248,7 @@ def main() -> int:
         return fail("нет текста выпуска %s — выпуск без описания не собирается" % notes_file.relative_to(ROOT))
 
     pc = DIST / ("SteamDeck-KVM-%s-windows-x64-setup.exe" % version)
-    deck = DIST / ("SteamDeck-KVM-%s-steamos-x86_64.tar.gz" % version)
     desktop = DIST / "SteamDeck-KVM-Install.desktop"
-    installer = DIST / "install.sh"
-    sums = DIST / "SHA256SUMS.txt"
 
     if not args.проверить:
         load_private_words()
@@ -343,14 +263,12 @@ def main() -> int:
             for problem in build_problems:
                 print("  НАХОДКА: " + problem)
             return 1
-        build_deck(version)
-        build_loose_files(desktop, installer)
-        write_sums([pc, deck, desktop, installer])
+        desktop.write_bytes((ROOT / "apps" / "deck" / "SteamDeck-KVM-Install.desktop").read_bytes().replace(b"\r\n", b"\n"))
         shutil.copyfile(notes_file, DIST / "RELEASE_NOTES.md")
 
-    problems = verify(version, pc, deck, sums, [desktop, installer])
-    print("ЧИСЛА ПРИЁМКИ: версия %s, файлов выпуска 4, размер ПК %d КБ, Deck %d КБ, находок %d" % (
-        version, pc.stat().st_size // 1024, deck.stat().st_size // 1024, len(problems)))
+    problems = verify(version, pc, desktop)
+    print("ЧИСЛА ПРИЁМКИ: версия %s, файлов выпуска 2, установщик ПК %d КБ, находок %d" % (
+        version, pc.stat().st_size // 1024 if pc.is_file() else 0, len(problems)))
     for problem in problems:
         print("  НАХОДКА: " + problem)
     return 1 if problems else 0

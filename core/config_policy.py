@@ -31,9 +31,6 @@ PROTOCOL = "DECKKVM2"
 SCREEN_NAME = "steamdeck"
 
 GITHUB_REPO = "IBakhitov-lin/SteamDeck-KVM"
-ASSET_PREFIX = "SteamDeck-KVM-"
-DECK_ASSET_SUFFIX = "-steamos-x86_64.tar.gz"    # имя архива: <Имя>-<X.Y.Z>-<платформа>-<архитектура>
-CHECKSUMS_ASSET = "SHA256SUMS.txt"
 
 # Официальный интерфейс выпусков GitHub без ключа: шестьдесят запросов в час на адрес.
 # Проверка раз в шесть часов расходует четыре — запас в пятнадцать раз.
@@ -59,13 +56,6 @@ def state_dir() -> Path:
     if override:
         return Path(override)
     return _xdg("XDG_STATE_HOME", ".local/state") / "steamdeck-kvm"
-
-
-def app_home() -> Path:
-    override = os.environ.get("STEAMDECK_KVM_HOME")
-    if override:
-        return Path(override)
-    return _xdg("XDG_DATA_HOME", ".local/share") / "steamdeck-kvm"
 
 
 def repo_root() -> Path:

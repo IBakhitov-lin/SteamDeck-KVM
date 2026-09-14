@@ -35,22 +35,23 @@ def run_ps(body: str) -> dict:
 
 
 def release(tag, with_sums=True, archive="SteamDeck-KVM-1.2.0-windows-x64-setup.exe"):
-    assets = [{"name": archive, "browser_download_url": "http://x/a"}]
+    asset = {"name": archive, "browser_download_url": "http://x/a"}
     if with_sums:
-        assets.append({"name": "SHA256SUMS.txt", "browser_download_url": "http://x/s"})
+        asset["digest"] = "sha256:" + "ab" * 32
+    assets = [asset]
     return {"tag_name": tag, "assets": assets, "body": "## Мышь в игровом режиме\n- подробности"}
 
 
 def choose(payload, current):
     data = json.dumps(payload, ensure_ascii=False).replace("'", "''")
     return run_ps("$r = Выбрать-Обновление ('%s' | ConvertFrom-Json) '%s'; "
-                  "if ($r) { $r.Remove('Архив'); $r.Remove('Суммы'); $r | ConvertTo-Json -Compress } else { '{}' }"
+                  "if ($r) { $r.Remove('Архив'); $r | ConvertTo-Json -Compress } else { '{}' }"
                   % (data, current))
 
 
 def test_newer_release_is_chosen_with_note():
     result = choose(release("v1.2.0"), "1.0.0")
-    assert result == {"Версия": "1.2.0", "Заметка": "Мышь в игровом режиме"}
+    assert result == {"Версия": "1.2.0", "Заметка": "Мышь в игровом режиме", "Сумма": "AB" * 32}
 
 
 def test_same_older_or_unparsable_release_is_not_chosen():
@@ -75,34 +76,30 @@ def make_setup(folder: Path, body: bytes = b"MZ" + b"\x90" * 64, name="SteamDeck
     return setup
 
 
-def verify(setup: Path, sums: str) -> dict:
-    return run_ps("try { Проверить-Установщик -Установщик '%s' -ТекстСумм '%s' | Out-Null; '{\"ok\":true}' } "
+def verify(setup: Path, digest: str) -> dict:
+    return run_ps("try { Проверить-Установщик -Установщик '%s' -Сумма '%s' | Out-Null; '{\"ok\":true}' } "
                   "catch { @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress }"
-                  % (setup, sums.replace("'", "''")))
+                  % (setup, digest))
 
 
-def test_good_installer_passes():
-    import tempfile
-    with tempfile.TemporaryDirectory() as folder:
-        setup = make_setup(Path(folder))
-        sums = "%s  %s\n" % (hashlib.sha256(setup.read_bytes()).hexdigest(), setup.name)
-        assert verify(setup, sums) == {"ok": True}
+def test_good_installer_passes(tmp_path):
+    setup = make_setup(tmp_path)
+    assert verify(setup, hashlib.sha256(setup.read_bytes()).hexdigest()) == {"ok": True}
 
 
 def test_checksum_mismatch_is_refused(tmp_path):
     setup = make_setup(tmp_path)
-    result = verify(setup, "0" * 64 + "  " + setup.name)
+    result = verify(setup, "0" * 64)
     assert result["ok"] is False and "сумма" in result["error"]
 
 
-def test_installer_missing_from_sums_is_refused(tmp_path):
+def test_installer_without_checksum_is_refused(tmp_path):
     setup = make_setup(tmp_path)
-    result = verify(setup, "%s  other.exe\n" % hashlib.sha256(setup.read_bytes()).hexdigest())
-    assert result["ok"] is False and "нет строки" in result["error"]
+    result = verify(setup, "")
+    assert result["ok"] is False and "нет контрольной суммы" in result["error"]
 
 
 def test_non_executable_with_matching_sum_is_refused(tmp_path):
     setup = make_setup(tmp_path, body=b"<html>not found</html>")
-    sums = "%s  %s\n" % (hashlib.sha256(setup.read_bytes()).hexdigest(), setup.name)
-    result = verify(setup, sums)
+    result = verify(setup, hashlib.sha256(setup.read_bytes()).hexdigest())
     assert result["ok"] is False and "не исполняемый" in result["error"]

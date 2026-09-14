@@ -12,9 +12,9 @@ Move the mouse off the edge of your monitor — the cursor lands on the Steam De
 
 1. Switch to **Desktop Mode** (Steam button → Power → Switch to Desktop).
 2. Download **[SteamDeck-KVM-Install.desktop](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop)**. Firefox may save it as `….desktop.download` — remove the `.download` ending.
-3. Double-click the downloaded file. It fetches the latest version, checks its checksum and installs it. The Deck password is asked only when upgrading from a pre-1.0 install.
+3. Double-click the downloaded file. It downloads the latest version and installs it. The Deck password is asked only when upgrading from a pre-1.0 install.
 
-Offline: download `SteamDeck-KVM-<version>-steamos-x86_64.tar.gz`, extract, run `bash install.sh`.
+Offline: download **Source code (tar.gz)** of a release, extract, run `bash apps/deck/install.sh`.
 
 ### PC (Windows)
 
@@ -30,7 +30,7 @@ Offline: download `SteamDeck-KVM-<version>-steamos-x86_64.tar.gz`, extract, run 
 
 ## Update
 
-An **Update** button appears in both apps when a new release is out. Pairing and settings are kept.
+An **Update** button appears in both apps when a new release is out; it runs the installer of that release. Pairing and settings are kept.
 
 ## Uninstall
 
@@ -40,7 +40,7 @@ An **Update** button appears in both apps when a new release is out. Pairing and
 ## Troubleshooting
 
 - **Deck doesn't find the PC** — guest Wi-Fi with client isolation, different subnets and full-tunnel VPNs block discovery. Put `server=192.168.x.x` into `~/.local/state/steamdeck-kvm/settings.conf` on the Deck.
-- **The installer doesn't start** — open Konsole and run `curl -fLO https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/install.sh && bash install.sh`.
+- **The installer doesn't start** — open Konsole and run `curl -fLO https://raw.githubusercontent.com/IBakhitov-lin/SteamDeck-KVM/main/apps/deck/install.sh && bash install.sh`.
 - **Still stuck** — both windows have a **Log** button; the Deck log is also in `journalctl --user -u steamdeck-kvm`.
 
 ## How it works

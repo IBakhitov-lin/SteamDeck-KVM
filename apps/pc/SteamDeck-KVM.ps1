@@ -478,11 +478,6 @@ function Шаг-Обновления {
             Показать-Обновление $ui ("Обновить до {0}{1}" -f $выбор.Версия, $хвост)
             Write-Log ("доступно обновление {0}" -f $выбор.Версия)
         }
-        'суммы' {
-            $script:UpdateInfo['ТекстСумм'] = $задача.Result
-            $script:UpdateStage = 'установщик'
-            $script:UpdateTask = (Новый-Загрузчик).DownloadDataTaskAsync($script:UpdateInfo.Архив.browser_download_url)
-        }
         'установщик' {
             try { Применить-Обновление $задача.Result }
             catch {
@@ -498,8 +493,8 @@ function Начать-Обновление {
     if (-not $script:UpdateInfo -or $script:UpdateTask) { return }
     $ui.Обновление.Enabled = $false
     $ui.Обновление.Text = ('Обновляется до {0}…' -f $script:UpdateInfo.Версия)
-    $script:UpdateStage = 'суммы'
-    $script:UpdateTask = (Новый-Загрузчик).DownloadStringTaskAsync($script:UpdateInfo.Суммы.browser_download_url)
+    $script:UpdateStage = 'установщик'
+    $script:UpdateTask = (Новый-Загрузчик).DownloadDataTaskAsync($script:UpdateInfo.Архив.browser_download_url)
 }
 
 function Применить-Обновление([byte[]]$Данные) {
@@ -508,7 +503,7 @@ function Применить-Обновление([byte[]]$Данные) {
     New-Item -ItemType Directory -Path $папка | Out-Null
     $установщик = Join-Path $папка $script:UpdateInfo.Архив.name
     [System.IO.File]::WriteAllBytes($установщик, $Данные)
-    Проверить-Установщик -Установщик $установщик -ТекстСумм $script:UpdateInfo.ТекстСумм | Out-Null
+    Проверить-Установщик -Установщик $установщик -Сумма $script:UpdateInfo.Сумма | Out-Null
     # Установщик тихо заменяет файлы программы и сам запускает новую версию; сервер при этом не
     # останавливается, и Deck обновления не замечает.
     Start-Process -FilePath $установщик -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
