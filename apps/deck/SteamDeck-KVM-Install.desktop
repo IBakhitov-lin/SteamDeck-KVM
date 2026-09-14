@@ -3,9 +3,11 @@
 Type=Application
 Name=Install SteamDeck-KVM
 Name[ru]=Установить SteamDeck-KVM
-Comment=Download the latest SteamDeck-KVM and install it on this Steam Deck
-Comment[ru]=Скачать последнюю версию SteamDeck-KVM и установить на этот Steam Deck
-Exec=sh -c 'rm -f /tmp/steamdeck-kvm-install.sh; if curl -f -S -s -L -o /tmp/steamdeck-kvm-install.sh --connect-timeout 60 https://raw.githubusercontent.com/IBakhitov-lin/SteamDeck-KVM/main/apps/deck/install.sh; then bash /tmp/steamdeck-kvm-install.sh; else echo "Could not download the installer. Check the Wi-Fi and try again. Press Enter to close."; read _; fi'
+Comment=Install keyboard and mouse sharing with your PC on this Steam Deck
+Comment[ru]=Установить общую клавиатуру и мышь с компьютером на этот Steam Deck
+Exec=python3 -c "import sys,base64,io,tarfile,tempfile,os;p=sys.argv[1];b=''.join(l[3:].strip() for l in open(p,encoding='utf-8',errors='replace') if l.startswith('#P '));ok=len(b)>0;print('В ярлыке нет программы: скачайте его заново со страницы выпуска.') if not ok else None;input('Enter — закрыть') if not ok else None;d=tempfile.mkdtemp(prefix='steamdeck-kvm-') if ok else '';t=tarfile.open(fileobj=io.BytesIO(base64.b64decode(b)),mode='r:gz') if ok else None;(t.extractall(d,filter='data') if hasattr(tarfile,'data_filter') else t.extractall(d)) if ok else None;os.environ['STEAMDECK_KVM_CLEANUP']=d;os.execvp('bash',['bash',os.path.join(d,'SteamDeck-KVM','apps','deck','install.sh')]) if ok else None" %k
 Icon=system-software-install
 Terminal=true
 StartupNotify=false
+# Программа лежит в этом же файле строками «#P» ниже: ярлык ставит её без интернета.
+# Строки дописывает private_tools/scripts/build_release_script.py; в репозитории их нет.

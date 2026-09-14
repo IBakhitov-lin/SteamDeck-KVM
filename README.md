@@ -12,9 +12,7 @@ Move the mouse off the edge of your monitor — the cursor lands on the Steam De
 
 1. Switch to **Desktop Mode** (Steam button → Power → Switch to Desktop).
 2. Download **[SteamDeck-KVM-Install.desktop](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop)**. Firefox may save it as `….desktop.download` — remove the `.download` ending.
-3. Double-click the downloaded file. It downloads the latest version and installs it. The Deck password is asked only when upgrading from a pre-1.0 install.
-
-Offline: download **Source code (tar.gz)** of a release, extract, run `bash apps/deck/install.sh`.
+3. Double-click the downloaded file. The app is inside it, so it installs without any further download. The Deck password is asked only when upgrading from a pre-1.0 install.
 
 ### PC (Windows)
 
@@ -40,7 +38,7 @@ An **Update** button appears in both apps when a new release is out; it runs the
 ## Troubleshooting
 
 - **Deck doesn't find the PC** — guest Wi-Fi with client isolation, different subnets and full-tunnel VPNs block discovery. Put `server=192.168.x.x` into `~/.local/state/steamdeck-kvm/settings.conf` on the Deck.
-- **The installer doesn't start** — open Konsole and run `curl -fLO https://raw.githubusercontent.com/IBakhitov-lin/SteamDeck-KVM/main/apps/deck/install.sh && bash install.sh`.
+- **The Deck shortcut does nothing** — make sure the file name ends with `.desktop`, not `.desktop.download`; or open Konsole in Downloads and run `python3 -c "$(sed -n 's/^Exec=python3 -c "\(.*\)" %k$/\1/p' SteamDeck-KVM-Install.desktop)" SteamDeck-KVM-Install.desktop`.
 - **Still stuck** — both windows have a **Log** button; the Deck log is also in `journalctl --user -u steamdeck-kvm`.
 
 ## How it works

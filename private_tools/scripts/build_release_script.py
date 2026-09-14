@@ -7,12 +7,15 @@ build_release_script.py
 
 1. `SteamDeck-KVM-<версия>-windows-x64-setup.exe` — установщик Windows (Inno Setup): ставит
    приложение для текущего пользователя, заводит ярлыки и запускает; им же приложение обновляется
-2. `SteamDeck-KVM-Install.desktop` — ярлык установки для Steam Deck: скачивает установщик из
-   репозитория, а тот берёт программу из архива исходного кода последнего выпуска
+2. `SteamDeck-KVM-Install.desktop` — ярлык установки для Steam Deck. Программа лежит В НЁМ ЖЕ:
+   архив tar.gz строками «#P <base64>» после записи ярлыка (строки с «#» — комментарии, рабочий
+   стол их не читает). Ярлык распаковывает её и запускает установщик — интернет не нужен.
+   Обновление на Deck'е скачивает этот же ярлык последнего выпуска с github.com
 
-Архивы исходного кода GitHub прикладывает к каждому выпуску сам — из них Steam Deck и ставится,
-поэтому сборщик сверяет, что всё нужное Deck'у лежит в истории репозитория. Контрольную сумму
-каждого файла выпуска считает GitHub (поле `digest`), отдельный файл сумм не нужен.
+Почему программа внутри ярлыка, а не отдельным скачиванием. На Steam Deck пользователя
+raw.githubusercontent.com недоступен, а github.com открывается: ярлык, скачанный браузером,
+дошёл, а установщик, который он качал с raw, — нет. Контрольную сумму каждого файла выпуска
+считает GitHub (поле `digest`), отдельный файл сумм не нужен.
 Третий файл `dist/RELEASE_NOTES.md` — текст выпуска для `gh release`, в выпуск не прикладывается.
 
 Копии общих файлов берутся из папки общих исходников В МОМЕНТ СБОРКИ, если она задана настройкой
@@ -26,7 +29,10 @@ build_release_script.py
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import os
+import tarfile
 import json
 import re
 import shutil
@@ -212,6 +218,48 @@ def build_pc(version: str) -> tuple[Path, list[str]]:
 DECK_REQUIRED = ("apps/deck/install.sh", "apps/deck/uninstall.sh", "apps/deck/steamdeck_kvm_service.py",
                  "apps/deck/steamdeck-kvm-app.qml", "apps/deck/steamdeck-kvm-app.sh", "apps/deck/steamdeck-kvm.service",
                  "apps/deck/steamdeck-kvm.png", "apps/palette.json", "core/config_policy.py", "VERSION")
+PAYLOAD_PREFIX = "#P "
+
+
+def deck_payload(version: str) -> bytes:
+    """Программа Deck'а архивом tar.gz: верхняя папка SteamDeck-KVM/, внутри раскладка репозитория."""
+    buffer = io.BytesIO()
+
+    def add(tar, data: bytes, arcname: str, executable: bool = False):
+        if arcname.endswith((".sh", ".py", ".desktop", ".service", ".qml", "VERSION")):
+            data = data.replace(b"\r\n", b"\n")  # файлы Linux — с переводом строки Linux
+        info = tarfile.TarInfo("SteamDeck-KVM/" + arcname)
+        info.size = len(data)
+        info.mode = 0o755 if executable else 0o644
+        info.mtime = int((ROOT / "VERSION").stat().st_mtime)
+        tar.addfile(info, io.BytesIO(data))
+
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for base in ("core", "apps/deck"):
+            for path in sorted((ROOT / base).rglob("*")):
+                if path.is_file() and not _skip(path):
+                    rel = path.relative_to(ROOT).as_posix()
+                    add(tar, path.read_bytes(), rel, executable=path.suffix == ".sh")
+        add(tar, (ROOT / "apps" / "palette.json").read_bytes(), "apps/palette.json")
+        add(tar, (version + "\n").encode(), "VERSION")
+    return buffer.getvalue()
+
+
+def build_desktop(version: str, desktop: Path) -> None:
+    """Ярлык установки с программой внутри."""
+    template = (ROOT / "apps" / "deck" / "SteamDeck-KVM-Install.desktop").read_bytes().decode("utf-8")
+    template = template.replace("\r\n", "\n").rstrip("\n") + "\n"
+    encoded = base64.b64encode(deck_payload(version)).decode("ascii")
+    lines = [PAYLOAD_PREFIX + encoded[i:i + 76] for i in range(0, len(encoded), 76)]
+    desktop.write_bytes((template + "\n".join(lines) + "\n").encode("utf-8"))
+
+
+def read_payload(desktop: Path) -> dict:
+    """Имена и содержимое файлов программы из ярлыка — так же, как их достанет Deck."""
+    text = desktop.read_text(encoding="utf-8")
+    encoded = "".join(line[len(PAYLOAD_PREFIX):].strip() for line in text.splitlines() if line.startswith(PAYLOAD_PREFIX))
+    with tarfile.open(fileobj=io.BytesIO(base64.b64decode(encoded)), mode="r:gz") as tar:
+        return {member.name: (member.mode, tar.extractfile(member).read()) for member in tar.getmembers() if member.isfile()}
 
 
 def verify(version: str, pc: Path, desktop: Path) -> list[str]:
@@ -219,13 +267,28 @@ def verify(version: str, pc: Path, desktop: Path) -> list[str]:
     problems = []
     if not pc.is_file() or pc.read_bytes()[:2] != b"MZ":
         problems.append("установщик ПК %s не собран" % pc.name)
-    if not desktop.is_file() or b"raw.githubusercontent.com" not in desktop.read_bytes():
-        problems.append("ярлык установки Steam Deck не собран или не ведёт на установщик")
-    tracked = set(subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True,
-                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.split())
+    if not desktop.is_file():
+        problems.append("ярлык установки Steam Deck не собран")
+        return problems
+    head = desktop.read_bytes()[:4000]
+    for host in (b"raw.githubusercontent.com", b"api.github.com", b"codeload.github.com"):
+        if host in head:
+            problems.append("ярлык установки ходит на %s — в части сетей он недоступен" % host.decode())
+    try:
+        files = read_payload(desktop)
+    except Exception as error:  # noqa: BLE001 — любой отказ разбора и есть находка
+        return problems + ["программа внутри ярлыка не читается: %s" % error]
     for need in DECK_REQUIRED:
-        if need not in tracked:
-            problems.append("в истории репозитория нет %s — архив исходного кода выпуска не поставит Deck" % need)
+        entry = files.get("SteamDeck-KVM/" + need)
+        if entry is None:
+            problems.append("в ярлыке установки нет %s" % need)
+        elif need.endswith(".sh") and not entry[0] & 0o111:
+            problems.append("%s в ярлыке без права на запуск" % need)
+    packed = files.get("SteamDeck-KVM/VERSION", (0, b""))[1].decode().strip()
+    if packed != version:
+        problems.append("в ярлыке версия %s, а собирается %s" % (packed, version))
+    if any(b"\r\n" in data for name, (_, data) in files.items() if name.endswith((".sh", ".py"))):
+        problems.append("в ярлыке файлы Linux с переводом строки Windows")
     committed = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if committed != version:
         problems.append("VERSION %s расходится со сборкой %s" % (committed, version))
@@ -263,12 +326,13 @@ def main() -> int:
             for problem in build_problems:
                 print("  НАХОДКА: " + problem)
             return 1
-        desktop.write_bytes((ROOT / "apps" / "deck" / "SteamDeck-KVM-Install.desktop").read_bytes().replace(b"\r\n", b"\n"))
+        build_desktop(version, desktop)
         shutil.copyfile(notes_file, DIST / "RELEASE_NOTES.md")
 
     problems = verify(version, pc, desktop)
-    print("ЧИСЛА ПРИЁМКИ: версия %s, файлов выпуска 2, установщик ПК %d КБ, находок %d" % (
-        version, pc.stat().st_size // 1024 if pc.is_file() else 0, len(problems)))
+    print("ЧИСЛА ПРИЁМКИ: версия %s, файлов выпуска 2, установщик ПК %d КБ, ярлык Deck %d КБ, находок %d" % (
+        version, pc.stat().st_size // 1024 if pc.is_file() else 0,
+        desktop.stat().st_size // 1024 if desktop.is_file() else 0, len(problems)))
     for problem in problems:
         print("  НАХОДКА: " + problem)
     return 1 if problems else 0

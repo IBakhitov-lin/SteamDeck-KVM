@@ -32,8 +32,8 @@ SCREEN_NAME = "steamdeck"
 
 GITHUB_REPO = "IBakhitov-lin/SteamDeck-KVM"
 
-# Официальный интерфейс выпусков GitHub без ключа: шестьдесят запросов в час на адрес.
-# Проверка раз в шесть часов расходует четыре — запас в пятнадцать раз.
+# Последний выпуск узнаётся по перенаправлению страницы github.com/…/releases/latest на метку
+# версии: api.github.com в части сетей недоступен, а github.com открывается и из браузера Deck'а.
 UPDATE_CHECK_SECONDS = 6 * 3600
 
 LEGACY_STATE_DIR = Path("/var/lib/deck-kvm")
@@ -42,7 +42,7 @@ LEGACY_STATE_DIR = Path("/var/lib/deck-kvm")
 def releases_url() -> str:
     return os.environ.get(
         "STEAMDECK_KVM_RELEASES_URL",
-        f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+        f"https://github.com/{GITHUB_REPO}/releases/latest",
     )
 
 

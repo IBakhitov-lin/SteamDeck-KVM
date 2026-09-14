@@ -2,11 +2,11 @@
 # НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Установка SteamDeck-KVM на Steam Deck: служба пользователя, окно, переезд прежней установки
 #
 # Три способа запуска, один файл:
-#   1. ярлык «Установить SteamDeck-KVM» из выпуска скачивает этот файл и запускает — установщик сам
-#      берёт архив исходного кода последнего выпуска и продолжает из распакованного
-#   2. кнопка «Обновить» в окне на Deck'е запускает его с ключом --latest — то же самое
-#   3. `bash apps/deck/install.sh` в распакованном архиве исходного кода либо в рабочей копии —
-#      установка без сети
+#   1. ярлык «Установить SteamDeck-KVM» из выпуска несёт программу в себе, распаковывает её и
+#      запускает этот файл — интернет для установки не нужен
+#   2. кнопка «Обновить» в окне на Deck'е запускает его с ключом --latest: он скачивает ярлык
+#      последнего выпуска со страницы выпусков GitHub и продолжает из его программы
+#   3. `bash apps/deck/install.sh` в рабочей копии репозитория
 #
 # Что куда кладётся — и почему раздельно:
 #   ~/.local/share/steamdeck-kvm/versions/<версия>  программа; указатель app — на текущую
@@ -31,7 +31,7 @@ pause_on_exit() {
 	local code=$?
 	# Временная папка загрузки — своя, созданная mktemp родительским запуском, и только в /tmp.
 	case "${STEAMDECK_KVM_CLEANUP:-}" in
-		"${TMPDIR:-/tmp}"/tmp.*) rm -rf "$STEAMDECK_KVM_CLEANUP" ;;
+		"${TMPDIR:-/tmp}"/steamdeck-kvm-*|"${TMPDIR:-/tmp}"/tmp.*) rm -rf "$STEAMDECK_KVM_CLEANUP" ;;
 	esac
 	if [ -t 0 ] && [ -z "${STEAMDECK_KVM_NO_PAUSE:-}" ]; then
 		printf '\nНажмите Enter, чтобы закрыть окно. / Press Enter to close.'
@@ -60,42 +60,32 @@ else
 	fi
 	WORK="$(mktemp -d)"
 	UNPACKED="$(python3 - "$WORK" <<'PY'
-import json, os, sys, tarfile, urllib.request
+import base64, io, os, sys, tarfile, urllib.request
 work = sys.argv[1]
-repo = "IBakhitov-lin/SteamDeck-KVM"
-url = os.environ.get("STEAMDECK_KVM_RELEASES_URL") or "https://api.github.com/repos/%s/releases/latest" % repo
-def fetch(address):
-    request = urllib.request.Request(address, headers={"User-Agent": "SteamDeck-KVM-installer"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return response.read()
+# Только адреса github.com: ярлык выпуска скачивается тем же путём, что и из браузера. Сервисы
+# raw.githubusercontent.com и api.github.com в части сетей недоступны.
+url = os.environ.get("STEAMDECK_KVM_INSTALLER_URL") or \
+    "https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop"
 try:
-    release = json.loads(fetch(url).decode("utf-8"))
-    tag = release.get("tag_name") or ""
-    if not tag:
-        raise RuntimeError("у последнего выпуска нет метки версии")
-    source = os.environ.get("STEAMDECK_KVM_SOURCE_URL") or \
-        "https://github.com/%s/archive/refs/tags/%s.tar.gz" % (repo, tag)
-    archive = os.path.join(work, "source.tar.gz")
-    with open(archive, "wb") as handle:
-        handle.write(fetch(source))
-    with tarfile.open(archive, "r:gz") as tar:
-        members = tar.getmembers()
-        for member in members:
+    request = urllib.request.Request(url, headers={"User-Agent": "SteamDeck-KVM-installer"})
+    with urllib.request.urlopen(request, timeout=120) as response:
+        text = response.read().decode("utf-8", "replace")
+    payload = "".join(line[3:].strip() for line in text.splitlines() if line.startswith("#P "))
+    if not payload:
+        raise RuntimeError("в ярлыке последнего выпуска нет программы")
+    with tarfile.open(fileobj=io.BytesIO(base64.b64decode(payload)), mode="r:gz") as tar:
+        for member in tar.getmembers():
             parts = member.name.split("/")
             if member.name.startswith(("/", "\\")) or ".." in parts or not (member.isfile() or member.isdir()):
-                raise RuntimeError("в архиве недопустимый путь: %s" % member.name)
-        tops = {member.name.split("/")[0] for member in members}
-        if len(tops) != 1:
-            raise RuntimeError("в архиве не одна верхняя папка")
+                raise RuntimeError("в программе недопустимый путь: %s" % member.name)
         if hasattr(tarfile, "data_filter"):
             tar.extractall(work, filter="data")
         else:
             tar.extractall(work)
-    top = os.path.join(work, tops.pop())
+    top = os.path.join(work, "SteamDeck-KVM")
     if not os.path.isfile(os.path.join(top, "apps", "deck", "install.sh")):
-        raise RuntimeError("в архиве выпуска %s нет установщика Steam Deck" % tag)
-    os.remove(archive)
-    sys.stderr.write("Скачана версия %s.\n" % tag)
+        raise RuntimeError("в программе нет установщика")
+    sys.stderr.write("Скачана последняя версия.\n")
     print(top)
 except Exception as error:
     sys.stderr.write("ОШИБКА загрузки: %s\n" % error)

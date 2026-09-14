@@ -12,9 +12,7 @@
 
 1. Перейдите в **режим рабочего стола** (кнопка Steam → Питание → Переключиться на рабочий стол).
 2. Скачайте **[SteamDeck-KVM-Install.desktop](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop)**. Firefox может сохранить его как `….desktop.download` — уберите окончание `.download`.
-3. Нажмите на скачанный файл дважды. Он сам скачает последнюю версию и установит. Пароль Deck'а спросят, только если стояла версия старше 1.0.
-
-Без интернета: скачайте у выпуска **Source code (tar.gz)**, распакуйте, выполните `bash apps/deck/install.sh`.
+3. Нажмите на скачанный файл дважды. Программа лежит внутри него, поэтому ставится без дополнительных загрузок. Пароль Deck'а спросят, только если стояла версия старше 1.0.
 
 ### Компьютер (Windows)
 
@@ -40,7 +38,7 @@
 ## Если не работает
 
 - **Deck не находит компьютер** — мешают гостевой Wi-Fi с изоляцией устройств, разные подсети и VPN на компьютере. Впишите на Deck'е `server=192.168.x.x` в `~/.local/state/steamdeck-kvm/settings.conf`.
-- **Установщик не запускается** — откройте Konsole и выполните `curl -fLO https://raw.githubusercontent.com/IBakhitov-lin/SteamDeck-KVM/main/apps/deck/install.sh && bash install.sh`.
+- **Ярлык на Deck'е ничего не делает** — проверьте, что имя файла кончается на `.desktop`, а не `.desktop.download`; либо откройте Konsole в «Загрузках» и выполните `python3 -c "$(sed -n 's/^Exec=python3 -c "\(.*\)" %k$/\1/p' SteamDeck-KVM-Install.desktop)" SteamDeck-KVM-Install.desktop`.
 - **Всё ещё не работает** — в обоих окнах есть кнопка **Журнал**; журнал Deck'а ещё и в `journalctl --user -u steamdeck-kvm`.
 
 ## Как это устроено

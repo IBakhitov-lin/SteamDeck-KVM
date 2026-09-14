@@ -6,13 +6,13 @@ release_update_soldier.py
 установщик (`apps/deck/install.sh --latest`), тот же, что при первой установке, — второго
 способа разложить программу нет.
 
-Почему официальный интерфейс выпусков, а не git. Человеку на Deck'е git не нужен: обновление —
-одна кнопка. Интерфейс работает без ключа (шестьдесят запросов в час на адрес).
+Как узнаётся последняя версия. Страница github.com/…/releases/latest перенаправляет на
+…/releases/tag/vX.Y.Z — метка берётся из конечного адреса. Интерфейс api.github.com и сервис
+raw.githubusercontent.com в части сетей недоступны, а github.com открывается и из браузера Deck'а.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import urllib.request
 
@@ -27,33 +27,31 @@ def parse_version(text: str):
     return tuple(int(part) for part in match.groups()) if match else None
 
 
-def _default_fetch(url: str, timeout: float = 20.0) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+def _default_resolve(url: str, timeout: float = 20.0) -> str:
+    """Конечный адрес после перенаправлений."""
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 — адрес свой
-        return response.read()
+        return response.geturl()
 
 
 class ReleaseUpdateSoldier:
-    def __init__(self, current_version: str, log=lambda text: None, fetch=None):
+    def __init__(self, current_version: str, log=lambda text: None, resolve=None):
         self.current = current_version
         self.log = log
-        self.fetch = fetch or _default_fetch
+        self.resolve = resolve or _default_resolve
 
     # ---- проверка -------------------------------------------------------------
 
     def check(self):
         """Выпуск новее текущей версии либо None. Любой отказ сети — None и строка в журнал."""
         try:
-            release = json.loads(self.fetch(config_policy.releases_url()).decode("utf-8"))
-        except Exception as error:  # сеть, лимит, неразборчивый ответ — обновления просто нет
+            final = self.resolve(config_policy.releases_url())
+        except Exception as error:  # сеть или отказ сервиса — обновления просто нет
             self.log("проверка обновлений не удалась: %s" % error)
             return None
-        latest = parse_version(release.get("tag_name", ""))
+        tag = final.rstrip("/").rsplit("/tag/", 1)[-1] if "/tag/" in final else ""
+        latest = parse_version(tag)
         current = parse_version(self.current)
         if latest is None or current is None or latest <= current:
             return None
-        notes = (release.get("body") or "").strip().splitlines()
-        return {
-            "version": "%d.%d.%d" % latest,
-            "notes": notes[0].lstrip("#- ").strip() if notes else "",
-        }
+        return {"version": "%d.%d.%d" % latest, "notes": ""}
