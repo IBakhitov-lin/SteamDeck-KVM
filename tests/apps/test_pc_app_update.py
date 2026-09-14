@@ -1,4 +1,4 @@
-# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Проверки обновления приложения ПК: выбор выпуска, сверка суммы, раскладка без порчи папки
+# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Проверки обновления приложения ПК: выбор выпуска, сверка суммы установщика
 """
 test_pc_app_update.py
 
@@ -12,7 +12,6 @@ import hashlib
 import json
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -35,7 +34,7 @@ def run_ps(body: str) -> dict:
     return json.loads(output[-1])
 
 
-def release(tag, with_sums=True, archive="SteamDeck-KVM-1.2.0-windows-x64.zip"):
+def release(tag, with_sums=True, archive="SteamDeck-KVM-1.2.0-windows-x64-setup.exe"):
     assets = [{"name": archive, "browser_download_url": "http://x/a"}]
     if with_sums:
         assets.append({"name": "SHA256SUMS.txt", "browser_download_url": "http://x/s"})
@@ -62,50 +61,48 @@ def test_same_older_or_unparsable_release_is_not_chosen():
 
 def test_release_without_sums_is_reported_as_skip():
     result = choose(release("v2.0.0", with_sums=False), "1.0.0")
-    assert "Пропуск" in result and "без архива" in result["Пропуск"]
+    assert "Пропуск" in result and "без установщика" in result["Пропуск"]
 
 
-def make_zip(folder: Path, version: str, name="SteamDeck-KVM-1.2.0-windows-x64.zip") -> Path:
-    archive = folder / name
-    with zipfile.ZipFile(archive, "w") as zf:
-        zf.writestr("SteamDeck-KVM-%s-windows-x64/SteamDeck-KVM.ps1" % version, "# новая версия\n")
-        zf.writestr("SteamDeck-KVM-%s-windows-x64/VERSION" % version, version + "\n")
-        zf.writestr("SteamDeck-KVM-%s-windows-x64/lib/palette.json" % version, "{}")
-    return archive
+def test_release_with_only_old_zip_is_skipped():
+    result = choose(release("v2.0.0", archive="SteamDeck-KVM-2.0.0-windows-x64.zip"), "1.0.0")
+    assert "Пропуск" in result and "без установщика" in result["Пропуск"]
 
 
-def lay(archive: Path, sums: str, version: str, program: Path) -> dict:
-    return run_ps("try { Разложить-Обновление -Архив '%s' -ТекстСумм '%s' -Версия '%s' -ПапкаПрограммы '%s' | Out-Null; "
-                  "'{\"ok\":true}' } catch { @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress }"
-                  % (archive, sums.replace("'", "''"), version, program))
+def make_setup(folder: Path, body: bytes = b"MZ" + b"\x90" * 64, name="SteamDeck-KVM-1.2.0-windows-x64-setup.exe") -> Path:
+    setup = folder / name
+    setup.write_bytes(body)
+    return setup
 
 
-def test_good_archive_replaces_program_files(tmp_path):
-    program = tmp_path / "program"
-    program.mkdir()
-    (program / "SteamDeck-KVM.ps1").write_text("# старая версия\n", encoding="utf-8")
-    archive = make_zip(tmp_path, "1.2.0")
-    sums = "%s  %s\n" % (hashlib.sha256(archive.read_bytes()).hexdigest(), archive.name)
-    assert lay(archive, sums, "1.2.0", program) == {"ok": True}
-    assert (program / "SteamDeck-KVM.ps1").read_text(encoding="utf-8") == "# новая версия\n"
-    assert (program / "lib" / "palette.json").exists()
+def verify(setup: Path, sums: str) -> dict:
+    return run_ps("try { Проверить-Установщик -Установщик '%s' -ТекстСумм '%s' | Out-Null; '{\"ok\":true}' } "
+                  "catch { @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress }"
+                  % (setup, sums.replace("'", "''")))
 
 
-def test_checksum_mismatch_leaves_program_untouched(tmp_path):
-    program = tmp_path / "program"
-    program.mkdir()
-    (program / "SteamDeck-KVM.ps1").write_text("# старая версия\n", encoding="utf-8")
-    archive = make_zip(tmp_path, "1.2.0")
-    result = lay(archive, "0" * 64 + "  " + archive.name, "1.2.0", program)
+def test_good_installer_passes():
+    import tempfile
+    with tempfile.TemporaryDirectory() as folder:
+        setup = make_setup(Path(folder))
+        sums = "%s  %s\n" % (hashlib.sha256(setup.read_bytes()).hexdigest(), setup.name)
+        assert verify(setup, sums) == {"ok": True}
+
+
+def test_checksum_mismatch_is_refused(tmp_path):
+    setup = make_setup(tmp_path)
+    result = verify(setup, "0" * 64 + "  " + setup.name)
     assert result["ok"] is False and "сумма" in result["error"]
-    assert (program / "SteamDeck-KVM.ps1").read_text(encoding="utf-8") == "# старая версия\n"
 
 
-def test_version_mismatch_is_refused(tmp_path):
-    program = tmp_path / "program"
-    program.mkdir()
-    archive = make_zip(tmp_path, "1.1.0")
-    sums = "%s  %s\n" % (hashlib.sha256(archive.read_bytes()).hexdigest(), archive.name)
-    result = lay(archive, sums, "1.2.0", program)
-    assert result["ok"] is False and "ожидалась 1.2.0" in result["error"]
-    assert not (program / "SteamDeck-KVM.ps1").exists()
+def test_installer_missing_from_sums_is_refused(tmp_path):
+    setup = make_setup(tmp_path)
+    result = verify(setup, "%s  other.exe\n" % hashlib.sha256(setup.read_bytes()).hexdigest())
+    assert result["ok"] is False and "нет строки" in result["error"]
+
+
+def test_non_executable_with_matching_sum_is_refused(tmp_path):
+    setup = make_setup(tmp_path, body=b"<html>not found</html>")
+    sums = "%s  %s\n" % (hashlib.sha256(setup.read_bytes()).hexdigest(), setup.name)
+    result = verify(setup, sums)
+    assert result["ok"] is False and "не исполняемый" in result["error"]

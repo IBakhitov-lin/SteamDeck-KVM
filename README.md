@@ -18,8 +18,8 @@ Offline: download `SteamDeck-KVM-<version>-steamos-x86_64.tar.gz`, extract, run 
 
 ### PC (Windows)
 
-1. Download `SteamDeck-KVM-<version>-windows-x64.zip` from the [latest release](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest).
-2. Unzip anywhere, run `SteamDeck-KVM.vbs`. It offers to install [Deskflow](https://github.com/deskflow/deskflow) (free, open source) if it's missing.
+1. Download `SteamDeck-KVM-<version>-windows-x64-setup.exe` from the [latest release](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest).
+2. Run it. It installs without admin rights, adds shortcuts and starts the app. Windows may warn about an unsigned app — click **More info → Run anyway**. The app offers to install [Deskflow](https://github.com/deskflow/deskflow) (free, open source) if it's missing.
 3. Press **Enable**. The Deck finds the PC by itself — both must be on the same Wi-Fi.
 
 ## Use
@@ -35,7 +35,7 @@ An **Update** button appears in both apps when a new release is out. Pairing and
 ## Uninstall
 
 - **Steam Deck** — open **SteamDeck-KVM** from the app menu → **Uninstall**. You choose whether to keep the pairing.
-- **PC** — quit from the tray icon, delete the folder. Settings live in `%LOCALAPPDATA%\SteamDeck-KVM`.
+- **PC** — Windows Settings → Apps → Installed apps → **SteamDeck-KVM** → Uninstall. You choose whether to keep the pairing.
 
 ## Troubleshooting
 

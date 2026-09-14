@@ -4,3 +4,4 @@ Developer tooling that is not part of the shipped app: release build, shortcuts,
 
 - `scripts/` — the tools.
 - `releases/` — release notes, one `v<version>.md` per release.
+- `installer/` — the Windows installer script.

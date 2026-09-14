@@ -11,8 +11,8 @@ build_release_script.py
 Имена — по шаблону `<Имя>-<X.Y.Z>-<платформа>-<архитектура>`, как у открытых проектов того же рода;
 файлы, которые скачивают по постоянной ссылке `releases/latest/download/<файл>`, — без версии.
 
-1. `SteamDeck-KVM-<версия>-windows-x64.zip` — папка приложения для Windows: запускатель, окно,
-   модули, копии общих файлов, значок
+1. `SteamDeck-KVM-<версия>-windows-x64-setup.exe` — установщик Windows (Inno Setup): ставит
+   приложение для текущего пользователя, ярлыки, запускает; им же приложение обновляется
 2. `SteamDeck-KVM-<версия>-steamos-x86_64.tar.gz` — установщик, удалятор и папка `app/` с
    клиентом. Именно tar.gz, а не zip: только он хранит права на запуск
 3. `SteamDeck-KVM-Install.desktop` — ярлык «Установить» для Deck'а: скачивает `install.sh` из
@@ -33,6 +33,7 @@ build_release_script.py
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import io
 import json
@@ -41,7 +42,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import zipfile
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -160,18 +161,62 @@ def _skip(path: Path) -> bool:
     return "__pycache__" in path.parts or path.suffix in (".pyc", ".lnk")
 
 
-def build_pc(version: str) -> Path:
-    name = "SteamDeck-KVM-%s-windows-x64" % version
-    archive = DIST / (name + ".zip")
+PC_REQUIRED = ("SteamDeck-KVM.vbs", "SteamDeck-KVM.ps1", "app-window.ps1", "app-update.ps1",
+               "lib/tray-common.ps1", "lib/tray-place.ps1", "lib/palette.json", "VERSION",
+               "SteamDeck-KVM.ico", "LICENSE")
+
+
+def find_iscc() -> Path | None:
+    """Компилятор Inno Setup: из PATH либо из обычных мест установки."""
+    found = shutil.which("ISCC")
+    candidates = [Path(found)] if found else []
+    candidates += [Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+                   Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+                   Path(r"C:\Program Files\Inno Setup 6\ISCC.exe")]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def stage_pc(version: str, stage: Path) -> list[str]:
+    """Разложить приложение ПК во временную папку так, как оно ляжет на машину человека."""
     pc = ROOT / "apps" / "pc"
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(pc.rglob("*")):
-            if path.is_file() and not _skip(path):
-                zf.write(path, "%s/%s" % (name, path.relative_to(pc).as_posix()))
-        zf.write(ROOT / "apps" / "palette.json", "%s/lib/palette.json" % name)
-        zf.writestr("%s/VERSION" % name, version + "\n")
-        zf.write(ROOT / "LICENSE", "%s/LICENSE" % name)
-    return archive
+    for path in sorted(pc.rglob("*")):
+        if path.is_file() and not _skip(path):
+            target = stage / path.relative_to(pc)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+    shutil.copyfile(ROOT / "apps" / "palette.json", stage / "lib" / "palette.json")
+    (stage / "VERSION").write_text(version + "\n", encoding="utf-8")
+    shutil.copyfile(ROOT / "LICENSE", stage / "LICENSE")
+    problems = ["в установщик ПК не попал %s" % need for need in PC_REQUIRED if not (stage / need).is_file()]
+    home = str(Path.home())
+    workspace = str(ROOT.parent)
+    markers = {home, home.replace("\\", "/"), workspace, workspace.replace("\\", "/")}
+    for path in stage.rglob("*"):
+        if path.is_file():
+            data = path.read_bytes()
+            if any(marker and marker.encode("utf-8") in data for marker in markers):
+                problems.append("в установщик ПК попал путь машины сборки: %s" % path.relative_to(stage))
+    return problems
+
+
+def build_pc(version: str) -> tuple[Path, list[str]]:
+    setup = DIST / ("SteamDeck-KVM-%s-windows-x64-setup.exe" % version)
+    iscc = find_iscc()
+    if iscc is None:
+        return setup, ["нет Inno Setup 6 — поставьте: winget install JRSoftware.InnoSetup"]
+    with tempfile.TemporaryDirectory(prefix="steamdeck-kvm-pc-") as folder:
+        stage = Path(folder)
+        problems = stage_pc(version, stage)
+        if problems:
+            return setup, problems
+        completed = subprocess.run(
+            [str(iscc), "/Q", "/DAppVersion=%s" % version, "/DSourceDir=%s" % stage, "/DOutputDir=%s" % DIST,
+             str(ROOT / "private_tools" / "installer" / "steamdeck-kvm-setup.iss")],
+            capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if completed.returncode != 0:
+            text = (completed.stdout + completed.stderr).decode("utf-8", "replace")[-1500:]
+            return setup, ["Inno Setup не собрал установщик: %s" % text]
+    return setup, []
 
 
 def build_deck(version: str) -> Path:
@@ -223,12 +268,8 @@ def write_sums(files: list[Path]) -> Path:
 def verify(version: str, pc: Path, deck: Path, sums: Path, loose: list[Path]) -> list[str]:
     """Сверить собранное с тем, что обещают установщик и обновление. Пустой список — чисто."""
     problems = []
-    with zipfile.ZipFile(pc) as zf:
-        names = set(zf.namelist())
-        for need in ("SteamDeck-KVM.vbs", "SteamDeck-KVM.ps1", "app-window.ps1", "app-update.ps1",
-                     "lib/tray-common.ps1", "lib/tray-place.ps1", "lib/palette.json", "VERSION", "SteamDeck-KVM.ico"):
-            if "SteamDeck-KVM-%s-windows-x64/%s" % (version, need) not in names:
-                problems.append("в архиве ПК нет %s" % need)
+    if not pc.is_file() or pc.read_bytes()[:2] != b"MZ":
+        problems.append("установщик ПК %s не собран" % pc.name)
     with tarfile.open(deck, "r:gz") as tar:
         members = {member.name: member for member in tar.getmembers()}
         prefix = "SteamDeck-KVM-%s-steamos-x86_64/" % version
@@ -259,7 +300,7 @@ def verify(version: str, pc: Path, deck: Path, sums: Path, loose: list[Path]) ->
     home = str(Path.home())
     workspace = str(ROOT.parent)
     markers = {home, home.replace("\\", "/"), workspace, workspace.replace("\\", "/")}
-    for archive in [pc, deck] + [path for path in loose if path.is_file()]:
+    for archive in [deck] + [path for path in loose if path.is_file()]:
         text = archive.read_bytes()
         for marker in markers:
             if marker and marker.encode("utf-8") in text:
@@ -283,7 +324,7 @@ def main() -> int:
     if not notes_file.is_file():
         return fail("нет текста выпуска %s — выпуск без описания не собирается" % notes_file.relative_to(ROOT))
 
-    pc = DIST / ("SteamDeck-KVM-%s-windows-x64.zip" % version)
+    pc = DIST / ("SteamDeck-KVM-%s-windows-x64-setup.exe" % version)
     deck = DIST / ("SteamDeck-KVM-%s-steamos-x86_64.tar.gz" % version)
     desktop = DIST / "SteamDeck-KVM-Install.desktop"
     installer = DIST / "install.sh"
@@ -297,7 +338,11 @@ def main() -> int:
         if DIST.exists():
             shutil.rmtree(DIST)
         DIST.mkdir()
-        build_pc(version)
+        pc, build_problems = build_pc(version)
+        if build_problems:
+            for problem in build_problems:
+                print("  НАХОДКА: " + problem)
+            return 1
         build_deck(version)
         build_loose_files(desktop, installer)
         write_sums([pc, deck, desktop, installer])

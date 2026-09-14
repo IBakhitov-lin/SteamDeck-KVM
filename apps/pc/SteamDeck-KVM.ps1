@@ -428,8 +428,8 @@ function Проверить-Уснувший-Deck {
 
 # ==== Обновление из выпусков GitHub, без git ======================================
 # Проверка идёт сама: при старте и раз в шесть часов. Кнопка «Обновить» появляется, только когда
-# обновление есть. Настройки и память о паре живут в %LOCALAPPDATA%, а не в папке программы, и
-# обновление их не трогает. Сервер при перезапуске приложения не останавливается — связь с Deck'ом
+# обновление есть. Обновляет программу установщик нового выпуска, запущенный тихо; настройки и
+# память о паре живут в %LOCALAPPDATA%, а не в папке программы, и обновление их не трогает. Сервер при перезапуске приложения не останавливается — связь с Deck'ом
 # обновления не замечает.
 $script:UpdateTask = $null
 $script:UpdateInfo = $null
@@ -480,10 +480,10 @@ function Шаг-Обновления {
         }
         'суммы' {
             $script:UpdateInfo['ТекстСумм'] = $задача.Result
-            $script:UpdateStage = 'архив'
+            $script:UpdateStage = 'установщик'
             $script:UpdateTask = (Новый-Загрузчик).DownloadDataTaskAsync($script:UpdateInfo.Архив.browser_download_url)
         }
-        'архив' {
+        'установщик' {
             try { Применить-Обновление $задача.Result }
             catch {
                 Write-Log ('обновление не применилось: ' + $_.Exception.Message)
@@ -506,21 +506,23 @@ function Применить-Обновление([byte[]]$Данные) {
     $папка = Join-Path $env:TEMP ('steamdeck-kvm-update-' + $script:UpdateInfo.Версия)
     if (Test-Path $папка) { Remove-Item $папка -Recurse -Force }
     New-Item -ItemType Directory -Path $папка | Out-Null
-    $zip = Join-Path $папка $script:UpdateInfo.Архив.name
-    [System.IO.File]::WriteAllBytes($zip, $Данные)
-    Разложить-Обновление -Архив $zip -ТекстСумм $script:UpdateInfo.ТекстСумм `
-                         -Версия $script:UpdateInfo.Версия -ПапкаПрограммы $Root | Out-Null
-    Write-Log ("обновлено до {0} — перезапуск приложения, сервер не останавливается" -f $script:UpdateInfo.Версия)
-    Start-Process -FilePath 'wscript.exe' -ArgumentList ('"{0}" /after-update' -f (Join-Path $Root 'SteamDeck-KVM.vbs'))
+    $установщик = Join-Path $папка $script:UpdateInfo.Архив.name
+    [System.IO.File]::WriteAllBytes($установщик, $Данные)
+    Проверить-Установщик -Установщик $установщик -ТекстСумм $script:UpdateInfo.ТекстСумм | Out-Null
+    # Установщик тихо заменяет файлы программы и сам запускает новую версию; сервер при этом не
+    # останавливается, и Deck обновления не замечает.
+    Start-Process -FilePath $установщик -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+    Write-Log ("запущен установщик {0} — выход для обновления" -f $script:UpdateInfo.Версия)
     Выйти-Для-Перезапуска
 }
 
 # ==== Ярлык на рабочем столе при первом запуске ====================================
-# Архив выпуска распаковывают куда угодно; ярлык появляется сам один раз. Удалённый человеком
+# Установленной программе ярлыки ставит установщик — и если человек снял галочку, ярлыка быть не
+# должно. Сам ярлык заводится только у программы, запущенной не из установки, один раз. Удалённый человеком
 # ярлык не возвращается: метка первого запуска остаётся. В рабочей копии ярлыки собирает
 # private_tools\scripts\make_shortcuts_script.ps1.
 function Ярлык-При-Первом-Запуске {
-    if ($IsDevCheckout) { return }
+    if ($IsDevCheckout -or (Test-Path -LiteralPath (Join-Path $Root 'unins000.exe'))) { return }
     $метка = Join-Path $ConfDir 'shortcut-made'
     if (Test-Path -LiteralPath $метка) { return }
     try {
