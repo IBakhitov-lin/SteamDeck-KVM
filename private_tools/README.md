@@ -1,14 +1,6 @@
-# Служебный контур
+# private_tools
 
-**Назначение:** сборка выпуска, ярлыки, проверки компоновки, тексты выпусков
-**Дата создания:** 2026-09-13
-**Ответственный контур:** private_tools
+Developer tooling that is not part of the shipped app: release build, shortcuts, layout checks, release notes. Nothing in `apps/` or `core/` imports from here, and none of it goes into a release.
 
-## Содержимое
-
-1. **`scripts/`** — исполняемые служебные скрипты
-2. **`releases/`** — текст каждого выпуска, `v<версия>.md`
-
-## Правила работы
-
-- Код ядра и приложений не импортирует ничего отсюда
+- `scripts/` — the tools.
+- `releases/` — release notes, one `v<version>.md` per release.

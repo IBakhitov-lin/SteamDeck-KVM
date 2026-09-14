@@ -1,18 +1,9 @@
-# Проверки
+# tests
 
-**Назначение:** автоматические проверки ядра, приложений и ядра Linux
-**Дата создания:** 2026-09-13
-**Ответственный контур:** tests
+- `conftest.py` — fake input devices and session sensor, state isolated in a temp folder.
+- `architecture/` — layout rules of the repository.
+- `core/` — the Deck client.
+- `apps/` — PC app logic that runs without a window.
+- `deck/` — tests that need a real Steam Deck kernel; skipped elsewhere with a reason.
 
-## Содержимое
-
-1. **`conftest.py`** — поддельные устройства ввода и датчик сеанса, изоляция состояния во временной папке
-2. **`core/`** — ядро клиента
-3. **`apps/`** — решения приложения Windows
-4. **`deck/`** — проверки на настоящем ядре Steam Deck — на Windows пропускаются с причиной
-
-## Правила работы
-
-- Запуск интерпретатором окружения проекта: `python -m pytest tests/core/test_имя.py -q`
-- Весь набор — перед выгрузкой, с причиной в самой команде
-- Каждый исправленный дефект оставляет регрессионную проверку
+Run: `python -m pytest tests/core/test_<name>.py -q`. Every fixed bug keeps a test that reproduces it.

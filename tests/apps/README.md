@@ -1,13 +1,3 @@
-# Проверки приложений
+# tests/apps
 
-**Назначение:** решения приложения Windows, проверяемые без окна
-**Дата создания:** 2026-09-13
-**Ответственный контур:** tests
-
-## Содержимое
-
-1. **`test_pc_app_update.py`** — выбор выпуска, сверка суммы, раскладка без порчи папки программы
-
-## Правила работы
-
-- PowerShell запускается без окна консоли
+- `test_pc_app_update.py` — release selection, checksum, replacing files without breaking the installed app; PowerShell runs without a console window.

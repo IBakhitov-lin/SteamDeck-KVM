@@ -1,13 +1,5 @@
-# Датчики
+# core/officers/intelligence
 
-**Назначение:** пассивные наблюдатели: ничего не меняют, только отвечают на вопросы о состоянии Deck'а
-**Дата создания:** 2026-09-13
-**Ответственный контур:** core
+Read-only observers: they change nothing and only answer questions about the Deck.
 
-## Содержимое
-
-1. **`deck_session_sensor.py`** — разрешение экрана, горит ли экран, игровой режим или рабочий стол
-
-## Правила работы
-
-- Корни `/sys` и `/proc` передаются параметрами — проверки подставляют поддельные деревья
+- `deck_session_sensor.py` — screen size, whether the screen is on, Game Mode or desktop; `/sys` and `/proc` roots are parameters so tests can use fake trees.

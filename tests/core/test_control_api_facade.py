@@ -13,7 +13,7 @@ from core.control_api_facade import ACTION_HEADER, ControlApiFacade
 @pytest.fixture
 def api():
     calls = []
-    facade = ControlApiFacade(lambda: {"state": "connected", "pc_name": "ILNUR"},
+    facade = ControlApiFacade(lambda: {"state": "connected", "pc_name": "DESKTOP-PC"},
                               lambda name: (calls.append(name) or True, "принято"), port=0).start()
     facade.calls = calls
     yield facade
@@ -34,7 +34,7 @@ def request(api, path, method="GET", header=True):
 
 def test_status_is_served(api):
     code, body = request(api, "status")
-    assert code == 200 and body == {"state": "connected", "pc_name": "ILNUR"}
+    assert code == 200 and body == {"state": "connected", "pc_name": "DESKTOP-PC"}
 
 
 def test_action_with_header_reaches_service(api):

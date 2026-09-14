@@ -1,13 +1,5 @@
-# Командиры
+# core/commanders
 
-**Назначение:** оркестраторы клиента: порядок работы, а не её содержание
-**Дата создания:** 2026-09-13
-**Ответственный контур:** core
+Orchestration: the order of work, not its content.
 
-## Содержимое
-
-1. **`deck_client_commander.py`** — сеанс с компьютером, защита погасшего экрана, очередь действий из окна
-
-## Правила работы
-
-- Командир решает, быть ли сеансу; во что превращается сообщение, решает офицер
+- `deck_client_commander.py` — the session with the PC, screen-off protection, actions requested by the window.

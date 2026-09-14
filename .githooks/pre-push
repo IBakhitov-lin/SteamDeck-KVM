@@ -1,35 +1,43 @@
 #!/bin/sh
-# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Хук на выгрузку SteamDeck-KVM: весь набор, окно, выпуск, правила публичного репозитория
+# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Хук на выгрузку SteamDeck-KVM: архитектура, тесты, окно, выпуск, правила публичного репозитория
 #
-# Порядок под быстрый отказ: архитектура → весь набор → окно → сверка собранного выпуска →
-# правила публичного репозитория. Обход `git push --no-verify` законен, когда выгружается сама
+# Порядок под быстрый отказ. Обход `git push --no-verify` законен, когда выгружается сама
 # починка набора.
 set -e
 
-[ -f "C:/AI/scripts/pre-push-skip.sh" ] && . "C:/AI/scripts/pre-push-skip.sh"
-
 ROOT=$(git rev-parse --show-toplevel)
-# Интерпретатор с pytest — локальная настройка репозитория, в историю не попадает:
-#   git config steamdeck-kvm.python "C:/путь/к/python.exe"
 PY=$(git config --get steamdeck-kvm.python || true)
 [ -n "$PY" ] && [ -x "$PY" ] || PY=$(command -v python3 || command -v python || echo python)
+SHARED=$(git config --get steamdeck-kvm.shared-source || true)
 
-echo "== SteamDeck-KVM pre-push 1/4: архитектура"
+if [ -n "$SHARED" ] && [ -f "$SHARED/scripts/pre-push-skip.sh" ]; then
+    . "$SHARED/scripts/pre-push-skip.sh"
+fi
+
+echo "== SteamDeck-KVM pre-push 1/4: architecture"
 "$PY" -X utf8 -m pytest "$ROOT/tests/architecture" -q -x -p no:cacheprovider || exit 1
 
-echo "== SteamDeck-KVM pre-push 2/4: весь набор"
-"$PY" -X utf8 -m pytest "$ROOT/tests" -q -p no:cacheprovider || {  # весь набор: перед выгрузкой
-    echo "ВЫГРУЗКА ОТКЛОНЕНА: набор тестов красный."
-    exit 1
-}
+echo "== SteamDeck-KVM pre-push 2/4: tests"
+if [ -n "$SHARED" ] && [ -f "$SHARED/scripts/tests-for-changes.py" ]; then
+    # Тесты файлов, уходящих на сервер: общий подборщик сопровождающего.
+    "$PY" -X utf8 "$SHARED/scripts/tests-for-changes.py" --прогон --выгрузка --корень "$ROOT" --питон "$PY" || {
+        echo "PUSH REJECTED: tests for the pushed files failed."
+        exit 1
+    }
+else
+    "$PY" -X utf8 -m pytest "$ROOT/tests" -q -p no:cacheprovider || {  # весь набор: у стороннего разработчика нет подборщика
+        echo "PUSH REJECTED: test suite failed."
+        exit 1
+    }
+fi
 
-echo "== SteamDeck-KVM pre-push 3/4: окно приложения ПК"
+echo "== SteamDeck-KVM pre-push 3/4: PC window layout"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$ROOT/private_tools/scripts/check_window_layout_script.ps1" || exit 1
 
-echo "== SteamDeck-KVM pre-push 4/4: правила публичного репозитория"
-if [ -f "C:/AI/scripts/check-github-repo.py" ]; then
-    "$PY" -X utf8 "C:/AI/scripts/check-github-repo.py" --корень "$ROOT" || {
-        echo "ВЫГРУЗКА ОТКЛОНЕНА: репозиторий расходится с C:/AI/github_canon.md."
+echo "== SteamDeck-KVM pre-push 4/4: release and public repository rules"
+if [ -n "$SHARED" ] && [ -f "$SHARED/scripts/check-github-repo.py" ]; then
+    "$PY" -X utf8 "$SHARED/scripts/check-github-repo.py" --корень "$ROOT" || {
+        echo "PUSH REJECTED: repository breaks the public repository rules."
         exit 1
     }
 fi
@@ -37,4 +45,4 @@ if [ -d "$ROOT/dist" ]; then
     "$PY" -X utf8 "$ROOT/private_tools/scripts/build_release_script.py" --проверить || exit 1
 fi
 
-echo "== Выгрузка разрешена."
+echo "== Push allowed."

@@ -1,36 +1,37 @@
 #!/bin/sh
 # НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Хук на коммит SteamDeck-KVM: архитектура, утечки в публичный репозиторий, окно
 #
-# Только дешёвое — секунды: архитектурные сторожа, проверка на утечку приватного и сторож окна,
-# если тронуто окно. Тесты поведения идут на выгрузку (pre-push). Обход `git commit --no-verify`
-# законен ровно тогда, когда коммит спасает работу посреди правки.
+# Только дешёвое — секунды. Тесты поведения идут на выгрузку (pre-push). Обход
+# `git commit --no-verify` законен ровно тогда, когда коммит спасает работу посреди правки.
 set -e
 
 ROOT=$(git rev-parse --show-toplevel)
-# Интерпретатор с pytest — локальная настройка репозитория, в историю не попадает:
-#   git config steamdeck-kvm.python "C:/путь/к/python.exe"
+# Локальные настройки репозитория, в историю не попадают:
+#   git config steamdeck-kvm.python /path/to/python        — интерпретатор с pytest
+#   git config steamdeck-kvm.shared-source /path/to/shared — общие проверки сопровождающего
 PY=$(git config --get steamdeck-kvm.python || true)
 [ -n "$PY" ] && [ -x "$PY" ] || PY=$(command -v python3 || command -v python || echo python)
+SHARED=$(git config --get steamdeck-kvm.shared-source || true)
 
-echo "== SteamDeck-KVM pre-commit: архитектура"
+echo "== SteamDeck-KVM pre-commit: architecture"
 "$PY" -X utf8 -m pytest "$ROOT/tests/architecture" -q -x -p no:cacheprovider || {
-    echo "КОММИТ ОТКЛОНЁН: архитектурные сторожа красные."
+    echo "COMMIT REJECTED: architecture tests failed."
     exit 1
 }
 
-# Репозиторий публичный: приватное не попадает в индекс. Сторож общий на все репозитории
-# автора; у стороннего разработчика его нет, и проверка молча пропускается — у него нечему течь.
-if [ -f "C:/AI/scripts/check-github-repo.py" ]; then
-    echo "== SteamDeck-KVM pre-commit: приватное в индексе"
-    "$PY" -X utf8 "C:/AI/scripts/check-github-repo.py" --корень "$ROOT" --индекс || {
-        echo "КОММИТ ОТКЛОНЁН: в индексе приватное — список выше."
+# Проверка утечки приватного — общая у сопровождающего; без настройки её нет, и у стороннего
+# разработчика нечему течь.
+if [ -n "$SHARED" ] && [ -f "$SHARED/scripts/check-github-repo.py" ]; then
+    echo "== SteamDeck-KVM pre-commit: private data in the index"
+    "$PY" -X utf8 "$SHARED/scripts/check-github-repo.py" --корень "$ROOT" --индекс || {
+        echo "COMMIT REJECTED: private data staged — see the list above."
         exit 1
     }
 fi
 
 if git diff --cached --name-only | grep -q "^apps/pc/"; then
-    echo "== тронуто приложение ПК: компоновка окна"
+    echo "== PC app changed: window layout"
     powershell -NoProfile -ExecutionPolicy Bypass -File "$ROOT/private_tools/scripts/check_window_layout_script.ps1" || exit 1
 fi
 
-echo "== Коммит разрешён."
+echo "== Commit allowed."

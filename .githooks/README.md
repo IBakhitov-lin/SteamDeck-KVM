@@ -1,15 +1,16 @@
-# Хуки git
+# Git hooks
 
-**Назначение:** проверки, которые git запускает сам на коммит и выгрузку — правило держит механизм, а не память
-**Дата создания:** 2026-09-13
-**Ответственный контур:** private_tools
+Checks that git runs on its own before a commit and before a push.
 
-## Содержимое
+- `pre-commit` — architecture tests, and the window layout check when the PC app changed; takes seconds.
+- `pre-push` — architecture, tests, the window layout, and a check of the built release in `dist/`.
 
-1. **`pre-commit`** — архитектура, приватное в индексе, компоновка окна при правке приложения ПК; секунды
-2. **`pre-push`** — весь набор тестов, окно, сверка собранного выпуска, правила публичного репозитория
+Enable once after cloning:
 
-## Правила работы
+```sh
+git config core.hooksPath .githooks
+git config steamdeck-kvm.python /path/to/python        # optional: a Python with pytest
+git config steamdeck-kvm.shared-source /path/to/shared # optional: maintainer's shared tooling
+```
 
-- Подключение одной командой в корне: `git config core.hooksPath .githooks` — папка лежит в истории и переезжает с клоном
-- Образцы — `C:\AI\templates\git-hooks\`; правило публичного репозитория — `C:\AI\github_canon.md`
+Without `steamdeck-kvm.shared-source` the maintainer checks are skipped and the push runs the full test suite.

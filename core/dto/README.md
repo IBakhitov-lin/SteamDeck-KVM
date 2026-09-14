@@ -1,13 +1,5 @@
-# Объекты передачи данных
+# core/dto
 
-**Назначение:** одна форма состояния клиента для окна, терминала и проверок
-**Дата создания:** 2026-09-13
-**Ответственный контур:** core
+Data shapes shared by the window, the terminal and the tests.
 
-## Содержимое
-
-1. **`client_status_dto.py`** — состояние клиента и закрытый список его состояний
-
-## Правила работы
-
-- Новое состояние добавляется вместе со словом для него в окне Deck'а
+- `client_status_dto.py` — client status and the closed list of its states; a new state needs a matching label in the Deck window.

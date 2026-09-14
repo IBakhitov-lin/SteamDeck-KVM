@@ -1,15 +1,7 @@
-# Служебные скрипты
+# private_tools/scripts
 
-**Назначение:** исполняемые скрипты обслуживания репозитория
-**Дата создания:** 2026-09-13
-**Ответственный контур:** private_tools
+- `build_release_script.py` — builds and verifies the release in `dist/`: Windows zip, Steam Deck tarball, install shortcut, installer, checksums.
+- `make_shortcuts_script.ps1` — icon and launch shortcuts for a working copy.
+- `check_window_layout_script.ps1` — checks the PC window and tray popup layout at several widths.
 
-## Содержимое
-
-1. **`build_release_script.py`** — сборка и сверка выпуска: два архива и контрольные суммы
-2. **`make_shortcuts_script.ps1`** — значок и ярлыки запуска на этой машине
-3. **`check_window_layout_script.ps1`** — сторож компоновки окна и плашки
-
-## Правила работы
-
-- Выпуск собирается только сборщиком — архив, упакованный руками, теряет права на запуск у файлов Deck'а
+Releases are built only by the script: an archive zipped by hand loses the execute bits the Deck needs.

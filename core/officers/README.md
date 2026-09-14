@@ -1,14 +1,6 @@
-# Офицеры
+# core/officers
 
-**Назначение:** решения клиента о том, во что превращается сообщение сервера
-**Дата создания:** 2026-09-13
-**Ответственный контур:** core
+Decisions about what a server message turns into.
 
-## Содержимое
-
-1. **`input_translation_officer.py`** — клавиши, модификаторы, способ движения курсора по режиму
-2. **`intelligence/`** — пассивные наблюдатели за состоянием Deck'а
-
-## Правила работы
-
-- Офицер импортирует солдат, но не командиров
+- `input_translation_officer.py` — keys, modifiers, how the cursor moves in Game Mode and on the desktop.
+- `intelligence/` — read-only observers of the Deck's state.

@@ -1,20 +1,16 @@
-# Ядро клиента Steam Deck
+# core
 
-**Назначение:** протокол Barrier/Synergy, виртуальные устройства ядра Linux, знакомство по сети, обновление из выпусков
-**Дата создания:** 2026-09-13
-**Ответственный контур:** core
+The Steam Deck client: Barrier/Synergy protocol, Linux virtual input devices, LAN pairing, updates from releases.
 
-## Содержимое
+- `soldiers/` — single-purpose building blocks: input device, protocol frames, pairing beacon, release download.
+- `officers/` — decisions: how a server message becomes input; `intelligence/` watches the Deck's state.
+- `commanders/` — the session with the PC.
+- `dto/` — the client status shape.
+- `config_policy.py` — ports, protocol name, release URL, data paths.
+- `control_api_facade.py` — local API the status window talks to.
 
-1. **`soldiers/`** — атомарные инструменты: устройство ввода, кадры протокола, маячок, выпуски
-2. **`officers/`** — решения: перевод сообщений во ввод; `intelligence/` — датчик сеанса Deck'а
-3. **`commanders/`** — сеанс связи с компьютером
-4. **`dto/`** — форма состояния клиента
-5. **`config_policy.py`** — порты, имя протокола, адрес выпусков, пути данных
-6. **`control_api_facade.py`** — локальный интерфейс службы для окна
+Rules:
 
-## Правила работы
-
-- Импорты — по матрице слоёв: солдаты не знают офицеров, офицеры не знают командиров
-- Модуль импортируется и на Windows: интерфейс ядра Linux подключается при создании устройства, а не при импорте
-- Паспорт модуля — первой строкой каждого `.py`
+- Layers import downwards only: soldiers know nothing about officers, officers nothing about commanders; `tests/architecture` enforces it.
+- Modules import on Windows too: the Linux input interface is opened when a device is created, not on import.
+- Every `.py` starts with a one-line purpose comment.

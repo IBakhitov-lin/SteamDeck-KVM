@@ -1,14 +1,3 @@
-# Проверки на Steam Deck
+# tests/deck
 
-**Назначение:** проверки, которым нужно настоящее ядро Linux и доступ к /dev/uinput
-**Дата создания:** 2026-09-13
-**Ответственный контур:** tests
-
-## Содержимое
-
-1. **`test_uinput_kernel.py`** — устройство создаётся, события читаются обратно из ядра
-
-## Правила работы
-
-- На Windows и без доступа пропускаются с названной причиной — пропуск не равен успеху
-- На Deck'е: `python3 -m pytest tests/deck -q` из рабочей копии
+Tests that need a real Linux kernel with access to `/dev/uinput`; skipped with a reason on Windows. On the Deck: `python3 -m pytest tests/deck -q`.

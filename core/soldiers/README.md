@@ -1,17 +1,8 @@
-# Солдаты
+# core/soldiers
 
-**Назначение:** атомарные инструменты клиента, каждый отвечает за один предмет
-**Дата создания:** 2026-09-13
-**Ответственный контур:** core
+Single-purpose building blocks.
 
-## Содержимое
-
-1. **`virtual_device_soldier.py`** — одно виртуальное устройство ввода через /dev/uinput
-2. **`barrier_wire_soldier.py`** — кадры протокола поверх потока TCP
-3. **`lan_discovery_soldier.py`** — знакомство с компьютером по маячку и память о паре
-4. **`release_update_soldier.py`** — обновление из выпусков GitHub без git
-
-## Правила работы
-
-- Солдат не импортирует офицеров и командиров
-- Пятый солдат одной темы — повод завести предметную подпапку
+- `virtual_device_soldier.py` — one virtual input device via `/dev/uinput`.
+- `barrier_wire_soldier.py` — protocol frames over a TCP stream.
+- `lan_discovery_soldier.py` — pairing beacon and the remembered PC.
+- `release_update_soldier.py` — updates from GitHub releases without git.

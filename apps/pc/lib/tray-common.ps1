@@ -1,7 +1,7 @@
-﻿# КОПИЯ общего модуля, собранная build_release_script.py из общего канона автора.
+﻿# КОПИЯ общего модуля, собранная build_release_script.py из общего исходника.
 # Правится исходник, а не копия: копия перезаписывается при каждой сборке выпуска.
 # НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Общий каркас приложения со значком в трее: единственный
-# экземпляр через мьютекс, значок NotifyIcon, цвет из контракта C:\AI\templates\palette.json.
+# экземпляр через мьютекс, значок NotifyIcon, цвет из контракта palette.json.
 #
 # ПРОИСХОЖДЕНИЕ — вынесено 08.09.2026 из SteamDeck-KVM.ps1, который списал устройство у
 # соседний проект (private_tools/scripts/соседний проект_tray.ps1). SteamDeck-KVM — уже ВТОРОЙ потребитель
@@ -10,7 +10,7 @@
 # перевод соседний проект на этот модуль отдельным долгом лежит в backlog.md ГСИ.
 #
 # Подключается точкой (dot-source) из тела приложения:
-#   . 'C:\AI\scripts\lib\tray-common.ps1'
+#   . 'tray-common.ps1'
 #
 # Что даёт:
 #   Get-SingleInstanceLock  — мьютекс на всё приложение
@@ -36,14 +36,14 @@ $script:PaletteCache = $null
 function Get-PaletteColor {
     <#
     .SYNOPSIS
-    Цвет из палитры (по умолчанию C:\AI\templates\palette.json, тема 'тёмная').
+    Цвет из палитры (по умолчанию palette.json, тема 'тёмная').
     Отсутствие файла или поля не считается ошибкой — отдаётся запасной цвет.
     #>
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][int[]]$Fallback,
         [string]$Theme = 'тёмная',
-        [string]$ContractPath = 'C:\AI\templates\palette.json'
+        [string]$ContractPath = (Join-Path $PSScriptRoot 'palette.json')
     )
     if ($null -eq $script:PaletteCache) {
         $script:PaletteCache = @{}

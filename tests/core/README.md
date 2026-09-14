@@ -1,18 +1,10 @@
-# Проверки ядра
+# tests/core
 
-**Назначение:** поведение и контракт солдат, офицера, датчика, командира и локального интерфейса
-**Дата создания:** 2026-09-13
-**Ответственный контур:** tests
+- `test_deck_client_protocol.py` — talking to the server, retries, screen off, a real Deskflow handshake.
+- `test_input_translation_officer.py` — modifiers, cursor movement mode, keys.
+- `test_deck_session_sensor.py` — screen, screen power, session mode.
+- `test_lan_discovery_soldier.py` — pairing, remembered PC, migration from the old install.
+- `test_release_update_soldier.py` — release selection, checksum, safe extraction.
+- `test_control_api_facade.py` — local API and its request header check.
 
-## Содержимое
-
-1. **`test_deck_client_protocol.py`** — разговор с сервером, повторы, погасший экран, стык с настоящим Deskflow
-2. **`test_input_translation_officer.py`** — модификаторы, способ движения курсора, клавиши
-3. **`test_deck_session_sensor.py`** — экран, питание экрана, режим сеанса
-4. **`test_lan_discovery_soldier.py`** — знакомство, пара, переезд прежней установки
-5. **`test_release_update_soldier.py`** — выбор выпуска, сумма, безопасная распаковка
-6. **`test_control_api_facade.py`** — локальный интерфейс и защита действий заголовком
-
-## Правила работы
-
-- Подменяется только то, чего нет на машине проверки: устройства ядра и композитор
+Only what is missing on the test machine is faked: kernel devices and the compositor.

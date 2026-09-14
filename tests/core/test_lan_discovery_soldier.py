@@ -8,7 +8,7 @@ from core.soldiers import lan_discovery_soldier as discovery_module
 from core.soldiers.lan_discovery_soldier import LanDiscoverySoldier, device_id, migrate_legacy_state
 
 
-def beacon(pc_id, name="ILNUR", state="on", knows="-"):
+def beacon(pc_id, name="DESKTOP-PC", state="on", knows="-"):
     return ("%s SERVER %s %s 24800 %s %s" % (config_policy.PROTOCOL, pc_id, name, state, knows)).encode()
 
 

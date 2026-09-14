@@ -1,17 +1,12 @@
-# Приложения SteamDeck-KVM
+# apps
 
-**Назначение:** исполняемые приложения для человека: окно на Windows и клиент со своим окном на Steam Deck
-**Дата создания:** 2026-09-13
-**Ответственный контур:** apps
+The two programs people install.
 
-## Содержимое
+- `pc/` — the Windows app: window, tray icon, Deskflow server, pairing with the Deck, updates.
+- `deck/` — the Steam Deck part: background service, status window, installer and uninstaller.
+- `palette.json` — colors, font, corner radii and icon shared by both windows.
 
-1. **`pc/`** — приложение Windows: окно, значок в трее, сервер Deskflow, знакомство с Deck'ом, обновление
-2. **`deck/`** — Steam Deck: служба, окно, установщик и удалятор
-3. **`palette.json`** — копия контракта палитры — цвета, гарнитура, радиусы, значок; общая для обоих приложений
+Rules:
 
-## Правила работы
-
-- Приложение Windows не импортирует ничего из `core/`: оно на PowerShell, ядро — на Python для Linux
-- Клиент Deck'а импортирует `core/` и больше ничего
-- Копию палитры пересобирает `private_tools/scripts/build_release_script.py` — правится исходник у автора
+- The Windows app is PowerShell and imports nothing from `core/`; `core/` is Python for Linux.
+- The Deck service imports `core/` and nothing else.

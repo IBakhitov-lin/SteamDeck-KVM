@@ -1,14 +1,3 @@
-# Тексты выпусков
+# private_tools/releases
 
-**Назначение:** описание каждого выпуска для страницы выпусков GitHub
-**Дата создания:** 2026-09-13
-**Ответственный контур:** private_tools
-
-## Содержимое
-
-1. **`v<версия>.md`** — первая строка — заметка, которую показывает кнопка «Обновить»
-
-## Правила работы
-
-- Без файла текущей версии сборщик выпуск не собирает
-- Первая строка короткая и про пользу, а не про код: её читают в кнопке обновления
+Release notes, one `v<version>.md` per release. The first line is short and user-facing: the Update button shows it. The build refuses to run without notes for the current `VERSION`.
