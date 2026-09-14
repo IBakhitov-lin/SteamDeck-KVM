@@ -11,8 +11,13 @@ Move the mouse off the edge of your monitor — the cursor lands on the Steam De
 ### Steam Deck
 
 1. Switch to **Desktop Mode** (Steam button → Power → Switch to Desktop).
-2. Download **[SteamDeck-KVM-Install.desktop](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop)**. Firefox may save it as `….desktop.download` — remove the `.download` ending.
-3. Double-click the downloaded file. The app is inside it, so it installs without any further download. The Deck password is asked only when upgrading from a pre-1.0 install.
+2. Open a terminal (right-click the desktop → **Open Terminal Here**, or launch **Konsole**) and run:
+   ```sh
+   curl -fsSL https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop -o kvm-install.desktop && python3 -c "$(sed -n 's/^Exec=python3 -c "\(.*\)" %k$/\1/p' kvm-install.desktop)" kvm-install.desktop
+   ```
+   This downloads the installer under a fixed name and runs it straight away — no browser involved, so there's nothing to rename. The Deck password is asked only when upgrading from a pre-1.0 install.
+
+   Prefer clicking? Download **[SteamDeck-KVM-Install.desktop](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop)** and double-click it — works the same way, but Firefox sometimes saves it as `….desktop.download`; rename it back to `.desktop` first.
 
 ### PC (Windows)
 
@@ -38,7 +43,7 @@ An **Update** button appears in both apps when a new release is out; it runs the
 ## Troubleshooting
 
 - **Deck doesn't find the PC** — guest Wi-Fi with client isolation, different subnets and full-tunnel VPNs block discovery. Put `server=192.168.x.x` into `~/.local/state/steamdeck-kvm/settings.conf` on the Deck.
-- **The Deck shortcut does nothing** — make sure the file name ends with `.desktop`, not `.desktop.download`; or open Konsole in Downloads and run `python3 -c "$(sed -n 's/^Exec=python3 -c "\(.*\)" %k$/\1/p' SteamDeck-KVM-Install.desktop)" SteamDeck-KVM-Install.desktop`.
+- **The Deck shortcut does nothing** — that's Firefox's `.desktop.download` renaming (see step 2 above); use the terminal command instead, it never hits this.
 - **Still stuck** — both windows have a **Log** button; the Deck log is also in `journalctl --user -u steamdeck-kvm`.
 
 ## How it works

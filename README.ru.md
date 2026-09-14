@@ -11,8 +11,13 @@
 ### Steam Deck
 
 1. Перейдите в **режим рабочего стола** (кнопка Steam → Питание → Переключиться на рабочий стол).
-2. Скачайте **[SteamDeck-KVM-Install.desktop](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop)**. Firefox может сохранить его как `….desktop.download` — уберите окончание `.download`.
-3. Нажмите на скачанный файл дважды. Программа лежит внутри него, поэтому ставится без дополнительных загрузок. Пароль Deck'а спросят, только если стояла версия старше 1.0.
+2. Откройте терминал (правой кнопкой по рабочему столу → **Открыть терминал**, либо запустите **Konsole**) и выполните:
+   ```sh
+   curl -fsSL https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop -o kvm-install.desktop && python3 -c "$(sed -n 's/^Exec=python3 -c "\(.*\)" %k$/\1/p' kvm-install.desktop)" kvm-install.desktop
+   ```
+   Команда сама скачивает установщик под постоянным именем и сразу его запускает — браузер тут не участвует, переименовывать нечего. Пароль Deck'а спросят, только если стояла версия старше 1.0.
+
+   Больше нравится нажимать мышью? Скачайте **[SteamDeck-KVM-Install.desktop](https://github.com/IBakhitov-lin/SteamDeck-KVM/releases/latest/download/SteamDeck-KVM-Install.desktop)** и нажмите на него дважды — работает так же, но Firefox иногда сохраняет файл как `….desktop.download`; в этом случае сначала верните окончание `.desktop`.
 
 ### Компьютер (Windows)
 
@@ -38,7 +43,7 @@
 ## Если не работает
 
 - **Deck не находит компьютер** — мешают гостевой Wi-Fi с изоляцией устройств, разные подсети и VPN на компьютере. Впишите на Deck'е `server=192.168.x.x` в `~/.local/state/steamdeck-kvm/settings.conf`.
-- **Ярлык на Deck'е ничего не делает** — проверьте, что имя файла кончается на `.desktop`, а не `.desktop.download`; либо откройте Konsole в «Загрузках» и выполните `python3 -c "$(sed -n 's/^Exec=python3 -c "\(.*\)" %k$/\1/p' SteamDeck-KVM-Install.desktop)" SteamDeck-KVM-Install.desktop`.
+- **Ярлык на Deck'е ничего не делает** — это Firefox сохранил файл с окончанием `.desktop.download` (см. шаг 2 выше); воспользуйтесь командой терминала — она это не задевает.
 - **Всё ещё не работает** — в обоих окнах есть кнопка **Журнал**; журнал Deck'а ещё и в `journalctl --user -u steamdeck-kvm`.
 
 ## Как это устроено
