@@ -33,6 +33,17 @@ def test_screen_size_picks_largest_connected(tmp_path):
     assert sensor(tmp_path).screen_size() == (1920, 1080)
 
 
+def test_screen_size_turns_the_sideways_internal_panel(tmp_path):
+    fake_sys(tmp_path, {"card0-eDP-1": ("connected", "800x1280", "On")})
+    assert sensor(tmp_path).screen_size() == (1280, 800)
+
+
+def test_screen_size_keeps_a_portrait_external_screen(tmp_path):
+    fake_sys(tmp_path, {"card0-eDP-1": ("disconnected", "800x1280", "Off"),
+                        "card0-DP-1": ("connected", "1080x1920", "On")})
+    assert sensor(tmp_path).screen_size() == (1080, 1920)
+
+
 def test_screen_size_falls_back_without_drm(tmp_path):
     assert sensor(tmp_path).screen_size() == (1280, 800)
 

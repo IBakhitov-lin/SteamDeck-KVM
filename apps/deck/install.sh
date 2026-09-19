@@ -192,7 +192,33 @@ systemctl --user daemon-reload
 systemctl --user enable "$UNIT" >/dev/null 2>&1
 systemctl --user restart "$UNIT"
 
-step "5. Ярлыки"
+step "5. Wi-Fi без экономии питания"
+# Экономия питания Wi-Fi будит приёмник Deck'а раз в сотню миллисекунд: замер 19.09.2026 — отклик
+# ПК→Deck от 12 до 368 мс, в среднем 141. Для мыши это рывки, для клавиатуры — залипание. Отключается
+# для текущей сети в её настройке NetworkManager (значение 2 — «выключено»); она старше общей
+# настройки системы и переживает перезагрузку. Не вышло — установка не прерывается.
+# `|| true` у каждого вызова: скрипт идёт под `set -e`, а шаг необязательный.
+WIFI_UUID="$(nmcli -t -f UUID,TYPE connection show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}' || true)"
+# Разрешение системы спрашивается в терминале; при обновлении из окна терминала нет — спрашивать некому.
+ASK=""
+[ -t 0 ] && ASK="--ask"
+if [ -z "$WIFI_UUID" ]; then
+	say "Deck подключён не по Wi-Fi — настраивать нечего."
+else
+	case "$(nmcli -g 802-11-wireless.powersave connection show "$WIFI_UUID" 2>/dev/null || true)" in
+		2*|disable*)
+			say "Экономия питания Wi-Fi уже выключена." ;;
+		*)
+			if nmcli $ASK connection modify "$WIFI_UUID" 802-11-wireless.powersave 2 2>/dev/null 				&& nmcli $ASK connection up "$WIFI_UUID" >/dev/null 2>&1; then
+				say "Экономия питания Wi-Fi выключена для этой сети — курсор без рывков."
+			else
+				say "Экономию питания Wi-Fi выключить не удалось. Вручную: Steam → Настройки → Для разработчиков →"
+				say "снять «Включить управление питанием Wi-Fi»."
+			fi ;;
+	esac
+fi
+
+step "6. Ярлыки"
 ICON="$APP_HOME/app/apps/deck/steamdeck-kvm.png"
 [ -f "$ICON" ] || ICON="input-keyboard"
 mkdir -p "$APPS_DIR"
@@ -216,7 +242,7 @@ update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
 say "Ярлык «Общая клавиатура и мышь» — в меню приложений и на рабочем столе."
 say "Чтобы видеть окно и в игровом режиме: правой кнопкой по ярлыку в меню → «Добавить в Steam»."
 
-step "6. Проверка"
+step "7. Проверка"
 sleep 2
 if systemctl --user is-active --quiet "$UNIT"; then
 	say "Служба работает."

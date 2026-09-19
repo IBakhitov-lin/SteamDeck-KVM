@@ -30,6 +30,7 @@ Move the mouse off the edge of your monitor — the cursor lands on the Steam De
 - **Switch** — push the cursor past the screen edge, or press `Ctrl+Alt+→` / `Ctrl+Alt+←` (any keyboard layout).
 - **After a reboot** — turn on the Deck, press **Enable** on the PC. The machines remember each other by device ID, not IP address.
 - **Deck screen off or Deck asleep** — the cursor stays on the PC.
+- **Languages** — the Deck gets the same keyboard layouts as the PC; switch with `Alt+Shift`. In Game Mode new layouts apply after Game Mode restarts.
 
 ## Update
 
@@ -44,6 +45,7 @@ An **Update** button appears in both apps when a new release is out; it runs the
 
 - **Deck doesn't find the PC** — guest Wi-Fi with client isolation, different subnets and full-tunnel VPNs block discovery. Put `server=192.168.x.x` into `~/.local/state/steamdeck-kvm/settings.conf` on the Deck.
 - **The Deck shortcut does nothing** — that's Firefox's `.desktop.download` renaming (see step 2 above); use the terminal command instead, it never hits this.
+- **Cursor lags or jumps** — the installer turns off Wi-Fi power saving for the current network; on another network run it again, or untick Steam → Settings → Developer → **Enable Wi-Fi Power Management**.
 - **Still stuck** — both windows have a **Log** button; the Deck log is also in `journalctl --user -u steamdeck-kvm`.
 
 ## How it works

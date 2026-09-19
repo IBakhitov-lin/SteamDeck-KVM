@@ -39,22 +39,24 @@ from core.soldiers.release_update_soldier import ReleaseUpdateSoldier  # noqa: E
 UNIT = "steamdeck-kvm.service"
 
 
-def read_settings() -> dict:
+def read_settings(path: Path | None = None) -> dict:
     """Настройки вручную не нужны; файл законен только для особых сетей.
 
-    Читаются два места: своё (`~/.local/state/steamdeck-kvm/settings.conf`) и файл прежней
-    установки `/etc/deck-kvm.conf` — чтобы адрес, прописанный там руками, пережил переезд.
+    Читается ТОЛЬКО свой файл — `~/.local/state/steamdeck-kvm/settings.conf`. Файл прежней
+    установки `/etc/deck-kvm.conf` не читается никогда: прежний установщик сам писал туда
+    `pointer=abs`, и новая версия, взявшая его как выбор человека, оставила игровой режим без
+    курсора. Новая версия не наследует настроек старой — у неё свои значения по умолчанию.
     """
     settings = {}
-    for path in (Path("/etc/deck-kvm.conf"), config_policy.state_dir() / "settings.conf"):
-        try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.split("#", 1)[0].strip()
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    settings[key.strip().lower()] = value.strip()
-        except OSError:
-            continue
+    try:
+        text = (path or config_policy.state_dir() / "settings.conf").read_text(encoding="utf-8")
+    except OSError:
+        return settings
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if "=" in line:
+            key, value = line.split("=", 1)
+            settings[key.strip().lower()] = value.strip()
     return settings
 
 

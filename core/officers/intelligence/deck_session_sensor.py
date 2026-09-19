@@ -68,6 +68,11 @@ class DeckSessionSensor:
             match = re.match(r"^(\d+)x(\d+)", first)
             if match:
                 width, height = int(match.group(1)), int(match.group(2))
+                # Встроенная панель Deck'а стоит боком: ядро называет её 800x1280, а оба
+                # композитора показывают 1280x800. Вертикальный размер ушёл бы серверу, и курсор
+                # не доставал бы до правой трети экрана, а по вертикали сползал бы с модели.
+                if "eDP" in connector.name and width < height:
+                    width, height = height, width
                 if best is None or width * height > best[0] * best[1]:
                     best = (width, height)
         return best or (1280, 800)

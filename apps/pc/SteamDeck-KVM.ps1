@@ -292,6 +292,13 @@ $script:BroadcastTargets = @('255.255.255.255')
 $script:DeckSeen = [datetime]::MinValue
 $script:LastBeacon = [datetime]::MinValue
 $script:Stranger = $null
+# Языки клавиатуры Windows (`en-US,ru-RU`) — берутся один раз при запуске, без пробелов: маячок
+# делится на поля пробелами. Не прочитались — «-», и Deck своих раскладок не трогает.
+$script:Languages = '-'
+try {
+    $языки = @(Get-WinUserLanguageList | ForEach-Object { $_.LanguageTag }) -join ','
+    if ($языки) { $script:Languages = $языки -replace '\s', '' }
+} catch { Write-Log ('языки клавиатуры не прочитались: ' + $_.Exception.Message) }
 
 function Get-BroadcastTargets {
     $цели = New-Object System.Collections.Generic.List[string]
@@ -345,7 +352,9 @@ function Send-Beacon([bool]$IsRunning) {
     # В маячке идёт НОМЕР этой машины и номер уже знакомого Deck'а (или «-»):
     # по ним Deck решает, свой это компьютер или соседский.
     $знакомый = if ($script:Pair.deck_id) { $script:Pair.deck_id } else { '-' }
-    $текст = '{0} SERVER {1} {2} {3} {4} {5}' -f $Protocol, $script:Pair.pc_id, $env:COMPUTERNAME, $KvmPort, $состояние, $знакомый
+    # Последним полем — языки клавиатуры этого компьютера: клавиши уходят на Deck физическими,
+    # и Deck заводит у себя те же раскладки с переключением Alt+Shift.
+    $текст = '{0} SERVER {1} {2} {3} {4} {5} {6}' -f $Protocol, $script:Pair.pc_id, $env:COMPUTERNAME, $KvmPort, $состояние, $знакомый, $script:Languages
     $байты = [System.Text.Encoding]::UTF8.GetBytes($текст)
     foreach ($цель in $script:BroadcastTargets) {
         try { $script:Udp.Send($байты, $байты.Length, $цель, $BeaconPort) | Out-Null } catch { }

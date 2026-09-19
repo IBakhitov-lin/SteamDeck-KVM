@@ -12,7 +12,12 @@ input_translation_officer.py
    столе композитор ускоряет смещения, и точное положение даёт только абсолютная ось. Разбор —
    `deck_session_sensor.py`. До этого клиент всегда слал абсолютную ось, и в игровом режиме
    курсора не было вовсе.
-2. **Модификаторы сверяются с сервером на КАЖДОМ нажатии, а не только при входе на экран.**
+2. **Клавиша передаётся ФИЗИЧЕСКАЯ, а не символ.** Сервер на Windows присылает с нажатием скан-код
+   клавиши; он и переводится в код ядра. Буквы печатает раскладка самого Deck'а — поэтому русский
+   текст выходит русским, а Alt+Shift переключает язык на Deck'е, как на обычной клавиатуре. Раньше
+   клавиша выбиралась по символу, и при английской раскладке Deck'а русские буквы превращались в
+   латиницу, а переключить язык было нечем. Символ остаётся запасным путём, если скан-кода нет.
+3. **Модификаторы сверяются с сервером на КАЖДОМ нажатии, а не только при входе на экран.**
    Сервер присылает с нажатием маску модификаторов, которые у него зажаты. Если отпускание
    модификатора потерялось — например, комбинацию перехвата сервер забрал себе целиком, —
    на Deck'е он остаётся нажатым, и каждая следующая буква в игре приходит как `Win+буква`.
@@ -45,7 +50,7 @@ K = {
     "F7": 65, "F8": 66, "F9": 67, "F10": 68, "NUMLOCK": 69, "SCROLLLOCK": 70,
     "KP7": 71, "KP8": 72, "KP9": 73, "KPMINUS": 74, "KP4": 75, "KP5": 76,
     "KP6": 77, "KPPLUS": 78, "KP1": 79, "KP2": 80, "KP3": 81, "KP0": 82,
-    "KPDOT": 83, "F11": 87, "F12": 88, "KPENTER": 96, "RIGHTCTRL": 97,
+    "KPDOT": 83, "102ND": 86, "F11": 87, "F12": 88, "KPENTER": 96, "RIGHTCTRL": 97,
     "KPSLASH": 98, "SYSRQ": 99, "RIGHTALT": 100, "HOME": 102, "UP": 103,
     "PAGEUP": 104, "LEFT": 105, "RIGHT": 106, "END": 107, "DOWN": 108,
     "PAGEDOWN": 109, "INSERT": 110, "DELETE": 111, "MUTE": 113,
@@ -134,6 +139,26 @@ for _c, _n in _ASCII.items():
 for _c, _n in _CYRILLIC.items():
     KEYMAP[ord(_c)] = K[_n]
     KEYMAP[ord(_c.upper())] = K[_n]
+
+# Скан-код Windows (набор 1) -> код ядра. Для обычных клавиш код ядра РАВЕН скан-коду: ядро
+# Linux нумерует клавиши по тому же набору. Расширенные клавиши (префикс E0, бит 0x100 в кнопке
+# протокола) нумеруются иначе и перечислены явно.
+_SCAN_PLAIN = set(range(0x01, 0x54)) | {0x56, 0x57, 0x58}
+_SCAN_EXTENDED = {
+    0x1C: K["KPENTER"], 0x1D: K["RIGHTCTRL"], 0x35: K["KPSLASH"], 0x37: K["SYSRQ"],
+    0x38: K["RIGHTALT"], 0x47: K["HOME"], 0x48: K["UP"], 0x49: K["PAGEUP"], 0x4B: K["LEFT"],
+    0x4D: K["RIGHT"], 0x4F: K["END"], 0x50: K["DOWN"], 0x51: K["PAGEDOWN"], 0x52: K["INSERT"],
+    0x53: K["DELETE"], 0x5B: K["LEFTMETA"], 0x5C: K["RIGHTMETA"], 0x5D: K["COMPOSE"],
+}
+
+
+def scan_to_key(button):
+    """Код ядра по кнопке протокола от сервера на Windows; None — кнопка незнакома."""
+    code, extended = button & 0xFF, bool(button & 0x100)
+    if extended:
+        return _SCAN_EXTENDED.get(code)
+    return code if code in _SCAN_PLAIN else None
+
 
 # Все коды, которые может выдать виртуальная клавиатура
 KEYBOARD_CODES = sorted(set(K.values()))
@@ -342,14 +367,14 @@ class InputTranslationOfficer:
         mask = u2(msg, 6) if len(msg) >= 8 else None
         if code == b"DKUP":
             button = u2(msg, 8) if len(msg) >= 10 else 0
-            target = self.pressed.pop(button, None) or KEYMAP.get(key_id)
+            target = self.pressed.pop(button, None) or self._resolve(key_id, button)
             if target:
                 self.key(target, KEY_UP)
             return
         if code == b"DKRP":
             repeats = u2(msg, 8) if len(msg) >= 10 else 1
             button = u2(msg, 10) if len(msg) >= 12 else 0
-            target = self.pressed.get(button) or KEYMAP.get(key_id)
+            target = self.pressed.get(button) or self._resolve(key_id, button)
             if target is None:
                 return
             if button not in self.pressed:     # повтор пришёл без нажатия
@@ -360,12 +385,18 @@ class InputTranslationOfficer:
                 self.key(target, KEY_REPEAT)
             return
         button = u2(msg, 8) if len(msg) >= 10 else 0
-        target = KEYMAP.get(key_id)
+        target = self._resolve(key_id, button)
         if target is None:
             return
         self._sync_before(target, mask)
         self.pressed[button] = target
         self.key(target, KEY_DOWN)
+
+    @staticmethod
+    def _resolve(key_id, button):
+        """Физическая клавиша по скан-коду; нет его — по символу."""
+        physical = scan_to_key(button) if button else None
+        return physical if physical is not None else KEYMAP.get(key_id)
 
     def _sync_before(self, target, mask):
         """Сверить модификаторы перед обычной клавишей. Перед самим модификатором — нет:

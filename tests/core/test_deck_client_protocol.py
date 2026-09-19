@@ -73,8 +73,8 @@ def test_conversation_with_fake_server():
         conn.sendall(frame(b"DMWM" + struct.pack(">hh", 0, 120)))
         conn.sendall(frame(b"DKDN" + struct.pack(">HHH", ord("a"), 0x0001, 30)))
         conn.sendall(frame(b"DKUP" + struct.pack(">HHH", ord("A"), 0x0001, 30)))
-        conn.sendall(frame(b"DKDN" + struct.pack(">HHH", 0xEF53, 0, 40)))
-        conn.sendall(frame(b"DKUP" + struct.pack(">HHH", 0xEF53, 0, 40)))
+        conn.sendall(frame(b"DKDN" + struct.pack(">HHH", 0xEF53, 0, 0x14D)))  # → со скан-кодом Windows
+        conn.sendall(frame(b"DKUP" + struct.pack(">HHH", 0xEF53, 0, 0x14D)))
         conn.sendall(frame(b"DMRM" + struct.pack(">hh", -5, 7)))
         time.sleep(0.4)
         conn.sendall(frame(b"COUT"))
@@ -109,6 +109,8 @@ def test_conversation_with_fake_server():
     assert (EV_KEY, K["RIGHT"], 1) in keyboard
     assert client.officer.pressed == {} and client.officer.mods == set(), \
         "после COUT ни одна клавиша не осталась зажатой"
+    key_lines = [line for line in client.lines if "клавиши приходят" in line]
+    assert len(key_lines) == 1 and "физическими" in key_lines[0], "способ передачи клавиш назван один раз за сеанс"
 
 
 def test_game_mode_moves_cursor_by_offsets_desktop_by_axis():
@@ -272,3 +274,27 @@ def _swallow(function):
         function()
     except Exception:
         pass
+
+
+def test_deck_layouts_follow_pc_languages_once():
+    class Discovery:
+        peer, peer_name, address, seen, server_on, port = "pc", "ПК", "10.0.0.2", 0.0, True, 24800
+        languages = "en-US,ru-RU"
+
+        def poll(self):
+            pass
+
+    class Layouts:
+        calls = []
+
+        def apply(self, languages):
+            Layouts.calls.append(languages)
+            return ["game", "desktop"]
+
+    client = DeckClientCommander([], 1, "steamdeck", lambda text: None, sensor=FakeSensor(),
+                                 device_factory=FakeDevice, discovery=Discovery(), layouts=Layouts())
+    client.watch_session(now=100.0)
+    client.watch_session(now=200.0)
+    assert Layouts.calls == ["en-US,ru-RU"], "одни и те же языки применяются один раз"
+    assert any("Alt+Shift" in line for line in client.lines)
+    assert any("после перезапуска игрового режима" in line for line in client.lines)

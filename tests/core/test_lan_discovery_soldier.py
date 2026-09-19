@@ -104,3 +104,14 @@ def test_unreadable_state_file_does_not_crash(tmp_path):
     folder.mkdir(parents=True, exist_ok=True)
     (folder / discovery_module.IDENTITY_FILE).write_bytes("номер".encode("cp1251") + b"\r\n")
     assert device_id(), "номер прочитан с заменой байтов, служба не упала"
+
+
+def test_pc_languages_are_taken_from_beacon():
+    s = soldier()
+    try:
+        s.accept(beacon("pc-1") + b" en-US,ru-RU", ("192.168.0.14", 50000))
+        assert s.languages == "en-US,ru-RU"
+        s.accept(beacon("pc-1"), ("192.168.0.14", 50000))
+        assert s.languages == "en-US,ru-RU", "маячок прежнего ПК без языков не стирает известные"
+    finally:
+        s.close()

@@ -99,6 +99,7 @@ class LanDiscoverySoldier:
         self.address = None
         self.port = config_policy.KVM_PORT
         self.server_on = False
+        self.languages = None                        # языки клавиатуры компьютера: en-US,ru-RU
         self.seen = 0.0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -121,7 +122,7 @@ class LanDiscoverySoldier:
     def accept(self, data: bytes, sender) -> bool:
         """Разобрать один маячок. Возвращает, признан ли он своим."""
         parts = data.decode("utf-8", "replace").split()
-        # PROTOCOL SERVER <номер ПК> <имя> <порт> <on|off> <номер знакомого Deck'а|->
+        # PROTOCOL SERVER <номер ПК> <имя> <порт> <on|off> <номер знакомого Deck'а|-> [<языки ПК>]
         if len(parts) < 6 or parts[0] != config_policy.PROTOCOL or parts[1] != "SERVER":
             return False
         pc_id, pc_name = parts[2], parts[3]
@@ -148,6 +149,8 @@ class LanDiscoverySoldier:
         except ValueError:
             pass
         self.server_on = parts[5] == "on"
+        if len(parts) > 7 and parts[7] != "-":
+            self.languages = parts[7]
         # Ответ идёт ровно туда, откуда пришёл маячок — в адрес И порт отправителя, а не на
         # порт рассылки. Порт у ПК временный, и именно на него брандмауэр Windows пропускает
         # ответ как продолжение своей же рассылки.

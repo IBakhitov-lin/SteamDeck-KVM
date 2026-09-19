@@ -36,7 +36,7 @@ from core.dto.client_status_dto import (
     CONNECTED, CONNECTING, DISPLAY_OFF, PC_OFF, WAITING_PC, ClientStatusDTO,
 )
 from core.officers.input_translation_officer import (
-    KEYBOARD_CODES, MOUSE_BUTTONS, POINTER_ABS, POINTER_REL, InputTranslationOfficer,
+    KEYBOARD_CODES, MOUSE_BUTTONS, POINTER_ABS, POINTER_REL, InputTranslationOfficer, scan_to_key,
 )
 from core.officers.intelligence.deck_session_sensor import DESKTOP, DeckSessionSensor
 from core.soldiers.barrier_wire_soldier import BarrierWireSoldier, i2, u2
@@ -61,7 +61,7 @@ class DeckClientCommander:
     SERVER_SILENCE_SECONDS = 12
 
     def __init__(self, hosts, port, name, log, pointer=POINTER_AUTO, discovery=None,
-                 sensor=None, device_factory=None):
+                 sensor=None, device_factory=None, layouts=None):
         if isinstance(hosts, str):
             hosts = [hosts]
         self.hosts = [host.strip() for host in hosts if host and host.strip()]
@@ -92,6 +92,9 @@ class DeckClientCommander:
         self.status = ClientStatusDTO(version=config_policy.app_version(), mode=self.mode,
                                       pointer=self.officer.pointer)
         self._display_off_count = 0
+        self._keys_logged = False
+        self.layouts = layouts
+        self._languages_applied = None
         self._next_mode_check = 0.0
         self._next_display_check = 0.0
 
@@ -148,12 +151,33 @@ class DeckClientCommander:
                 self.log("курсор теперь ведётся %s" % (
                     "абсолютной осью" if self.officer.pointer == POINTER_ABS else "смещениями"))
             self.set_status(mode=self.mode, pointer=self.officer.pointer)
+            self._follow_pc_languages()
         if now >= self._next_display_check:
             self._next_display_check = now + self.DISPLAY_CHECK_SECONDS
             on = self.sensor.display_on()
             self._display_off_count = 0 if on else self._display_off_count + 1
             self.set_status(display_on=on)
         return self._display_off_count < self.DISPLAY_OFF_CONFIRMATIONS
+
+    def _follow_pc_languages(self):
+        """Раскладки Deck'а — по языкам компьютера: клавиши приходят физическими."""
+        languages = self.discovery.languages if self.discovery else None
+        if not languages or languages == self._languages_applied:
+            return
+        self._languages_applied = languages
+        if self.layouts is None:
+            from core.soldiers.keyboard.keyboard_layout_soldier import KeyboardLayoutSoldier
+            self.layouts = KeyboardLayoutSoldier()
+        try:
+            changed = self.layouts.apply(languages)
+        except OSError as error:
+            self.log("раскладки не записаны: %s" % error)
+            return
+        if "desktop" in changed:
+            self.log("раскладки рабочего стола — как на компьютере (%s), переключение Alt+Shift" % languages)
+        if "game" in changed:
+            self.log("раскладки игрового режима — как на компьютере (%s); вступят после перезапуска игрового режима"
+                     % languages)
 
     # ---- действия из окна ------------------------------------------------------
 
@@ -211,6 +235,11 @@ class DeckClientCommander:
         elif code == b"DMWM":
             officer.wheel(i2(msg, 4), i2(msg, 6))
         elif code in (b"DKDN", b"DKRP", b"DKUP", b"DKDL"):
+            if code == b"DKDN" and not self._keys_logged and len(msg) >= 10:
+                self._keys_logged = True
+                physical = scan_to_key(u2(msg, 8)) is not None
+                self.log("клавиши приходят %s" % ("физическими — язык выбирает раскладка Deck'а, Alt+Shift"
+                                                  if physical else "символами — сервер не прислал скан-код"))
             officer.handle_key(code, msg)
             self.set_status(held_keys=officer.held_keys())
         elif code in (b"DSOP", b"CROP", b"CSEC", b"CCLP", b"DCLP", b"LSYN", b"SECN", b"DDRG", b"DFTR"):
@@ -230,6 +259,7 @@ class DeckClientCommander:
         self.log("подключён к %s:%d" % (self.host, self.port))
 
         hello = None
+        self._keys_logged = False
         sel = selectors.DefaultSelector()
         sel.register(sock, selectors.EVENT_READ)
         last_seen = time.monotonic()

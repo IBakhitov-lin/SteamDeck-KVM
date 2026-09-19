@@ -25,6 +25,11 @@ def key_events(o):
     return [event for event in o.kbd.events if event[0] == EV_KEY]
 
 
+def keys(o):
+    """Нажатия без типа события: (код клавиши, значение)."""
+    return [(code, value) for _, code, value in key_events(o)]
+
+
 def dkdn(key_id, mask, button):
     return b"DKDN" + struct.pack(">HHH", key_id, mask, button)
 
@@ -112,8 +117,46 @@ def test_repeat_without_press_presses_first():
 
 def test_unknown_key_is_ignored():
     o = officer()
-    o.handle_key(b"DKDN", dkdn(0xE7FF, 0, 1))              # KeyID вне всех таблиц
+    o.handle_key(b"DKDN", dkdn(0xE7FF, 0, 0))              # ни скан-кода, ни знакомого символа
+    o.handle_key(b"DKDN", dkdn(0xE7FF, 0, 0x160))          # расширенный скан-код вне таблицы
     assert key_events(o) == []
+
+
+def test_physical_key_wins_over_character():
+    # ПК в русской раскладке: символ «ф», но клавиша — та, где на латинице A (скан-код 0x1E).
+    o = officer()
+    o.handle_key(b"DKDN", dkdn(ord("ф"), 0, 0x1E))
+    o.handle_key(b"DKUP", dkup(ord("ф"), 0, 0x1E))
+    assert keys(o) == [(K["A"], KEY_DOWN), (K["A"], KEY_UP)]
+
+
+def test_russian_dot_is_the_slash_key_not_the_dot_key():
+    # «.» в русской раскладке стоит на клавише «/»: по символу вышла бы не та клавиша.
+    o = officer()
+    o.handle_key(b"DKDN", dkdn(ord("."), 0, 0x35))
+    assert keys(o) == [(K["SLASH"], KEY_DOWN)]
+
+
+def test_extended_scan_codes_are_arrows_and_right_modifiers():
+    pressed = []
+    for button in (0x148, 0x11D, 0x138, 0x15B, 0x153):      # ↑, правый Ctrl, правый Alt, Win, Delete
+        o = officer()
+        o.handle_key(b"DKDN", dkdn(0, 0, button))
+        pressed.append(keys(o)[0][0])
+    assert pressed == [K["UP"], K["RIGHTCTRL"], K["RIGHTALT"], K["LEFTMETA"], K["DELETE"]]
+
+
+def test_alt_shift_reaches_the_deck_as_two_keys():
+    # Переключение языка — дело Deck'а: до него доходят сами клавиши Alt и Shift.
+    o = officer()
+    o.handle_key(b"DKDN", dkdn(0xEFE9, 0, 0x38))
+    o.handle_key(b"DKDN", dkdn(0xEFE1, 0x0004, 0x2A))
+    assert [code for code, value in keys(o) if value == KEY_DOWN] == [K["LEFTALT"], K["LEFTSHIFT"]]
+
+
+def test_102nd_key_is_declared_by_the_keyboard():
+    from core.officers.input_translation_officer import KEYBOARD_CODES
+    assert K["102ND"] in KEYBOARD_CODES
 
 
 def test_wheel_rounds_towards_zero():
