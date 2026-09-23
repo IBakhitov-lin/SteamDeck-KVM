@@ -22,7 +22,7 @@ raw.githubusercontent.com недоступен, а github.com открывает
 `steamdeck-kvm.shared-source`: копия, лежащая в репозитории месяцами, расходится с исходником
 молча. Из копий вычищаются имена приватных проектов и пути рабочей машины — архив публичный.
 
-Запуск:  python private_tools/scripts/build_release_script.py [--проверить]
+Запуск:  python private_tools/scripts/build_release_script.py [--проверить | --копии]
 Код возврата: 0 — собрано и сверено; 1 — сборка отклонена с названной причиной.
 """
 
@@ -68,7 +68,7 @@ PRIVATE_WORDS = []
 
 
 def load_private_words():
-    checker = AI / "scripts" / "check-github-repo.py" if AI else None
+    checker = AI / ".code" / "scripts" / "checks" / "check-github-repo.py" if AI else None
     if checker is None or not checker.is_file():
         return
     import importlib.util
@@ -81,7 +81,7 @@ def load_private_words():
                                          pattern.flags), word))
     PRIVATE_WORDS.append((re.compile(r"(?i)[a-z]:[\\/]+users[\\/]+[^\\/\s`'\")]+"), "<папка пользователя>"))
 
-PALETTE_KEYS = ("тёмная", "светлая", "типографика", "радиусы", "значок")
+PALETTE_KEYS = ("тёмная", "светлая", "типографика", "радиусы", "значок", "оболочка")
 
 
 def fail(message: str) -> int:
@@ -111,13 +111,14 @@ def refresh_vendored_copies() -> list[str]:
     if AI is None:
         return ["общие исходники не заданы — копии общих файлов взяты из репозитория как есть"]
     pairs = [
-        (AI / "scripts" / "lib" / "tray-common.ps1", ROOT / "apps" / "pc" / "lib" / "tray-common.ps1"),
-        (AI / "scripts" / "tray-place.ps1", ROOT / "apps" / "pc" / "lib" / "tray-place.ps1"),
+        (AI / ".code" / "scripts" / "lib" / "tray-common.ps1", ROOT / "apps" / "pc" / "lib" / "tray-common.ps1"),
+        (AI / ".code" / "scripts" / "lib" / "tray-place.ps1", ROOT / "apps" / "pc" / "lib" / "tray-place.ps1"),
     ]
     for source, target in pairs:
+        # Пропавший исходник — отказ сборки, а не заметка: копия по старому пути молча не
+        # обновлялась с переезда общих скриптов, и трей отставал от канона.
         if not source.is_file():
-            notes.append("нет исходника %s — копия не обновлена" % source)
-            continue
+            raise SystemExit(fail("нет общего исходника %s — копия осталась бы старой молча" % source))
         text = source.read_bytes().decode("utf-8-sig")
         header = "# КОПИЯ общего модуля, собранная build_release_script.py из общего исходника.\n" \
                  "# Правится исходник, а не копия: копия перезаписывается при каждой сборке выпуска.\n"
@@ -301,7 +302,14 @@ def main() -> int:
         pass
     parser = argparse.ArgumentParser(description="Сборка выпуска SteamDeck-KVM")
     parser.add_argument("--проверить", action="store_true", help="только сверить уже собранное в dist/")
+    parser.add_argument("--копии", action="store_true", help="только обновить копии общих файлов, без сборки")
     args = parser.parse_args()
+
+    if args.копии:
+        load_private_words()
+        for note in refresh_vendored_copies():
+            print("  " + note)
+        return 0
 
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
