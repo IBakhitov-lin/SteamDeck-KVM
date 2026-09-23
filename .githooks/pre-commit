@@ -21,9 +21,10 @@ echo "== SteamDeck-KVM pre-commit: architecture"
 
 # Проверка утечки приватного — общая у сопровождающего; без настройки её нет, и у стороннего
 # разработчика нечему течь.
-if [ -n "$SHARED" ] && [ -f "$SHARED/scripts/check-github-repo.py" ]; then
+CHECKER="$SHARED/.code/scripts/checks/check-github-repo.py"
+if [ -n "$SHARED" ] && [ -f "$CHECKER" ]; then
     echo "== SteamDeck-KVM pre-commit: private data in the index"
-    "$PY" -X utf8 "$SHARED/scripts/check-github-repo.py" --корень "$ROOT" --индекс || {
+    "$PY" -X utf8 "$CHECKER" --корень "$ROOT" --индекс || {
         echo "COMMIT REJECTED: private data staged — see the list above."
         exit 1
     }

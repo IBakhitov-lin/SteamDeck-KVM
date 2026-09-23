@@ -35,6 +35,7 @@ class ClientStatusDTO:
     pointer: str = "abs"
     display_on: bool = True
     on_screen: bool = False
+    captured: bool = False          # игра спрятала курсор: смещения без края, на ПК не уходит
     held_keys: list = field(default_factory=list)
     update_available: str | None = None
     updating: bool = False

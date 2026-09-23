@@ -27,7 +27,8 @@ Move the mouse off the edge of your monitor — the cursor lands on the Steam De
 
 ## Use
 
-- **Switch** — push the cursor past the screen edge, or press `Ctrl+Alt+→` / `Ctrl+Alt+←` (any keyboard layout).
+- **Switch** — push the cursor past the screen edge, or `Alt+Tab` to the **Steam Deck** window on the PC; back to the PC — `Alt+Tab` on the Deck. `Ctrl+Alt+→` / `Ctrl+Alt+←` still work.
+- **Games** — when a game hides the cursor (third-person camera, shooters), the mouse turns the camera without hitting a screen edge and never slips back to the PC. Open the Steam menu (`Shift+Tab`, Steam button) and the cursor is free again; `Alt+Tab` leaves the game at any time.
 - **After a reboot** — turn on the Deck, press **Enable** on the PC. The machines remember each other by device ID, not IP address.
 - **Deck screen off or Deck asleep** — the cursor stays on the PC.
 - **Languages** — the Deck gets the same keyboard layouts as the PC; switch with `Alt+Shift`. In Game Mode new layouts apply after Game Mode restarts.

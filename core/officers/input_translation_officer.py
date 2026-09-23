@@ -254,6 +254,20 @@ class InputTranslationOfficer:
                 y = max(0, min(self.height - 1, self.cursor[1] + dy))
                 self.cursor = (x, y)
 
+    def move_rel_raw(self, dx, dy):
+        """Смещение от сервера без приведения к модели — для игры, захватившей курсор.
+
+        Модель положения ведётся дальше с упором в края: курсор, спрятанный бездействием, игра
+        не двигает, и после отпускания он встаёт туда же. Игра, возвращающая курсор в центр,
+        модель сбивает — это видно только на мгновение отпускания.
+        """
+        while dx or dy:
+            sx = max(-_REL_STEP, min(_REL_STEP, dx))
+            sy = max(-_REL_STEP, min(_REL_STEP, dy))
+            dx -= sx
+            dy -= sy
+            self.move_rel(sx, sy)
+
     def move_abs(self, x, y):
         """Поставить курсор в точку экрана Deck'а — способом, подходящим режиму."""
         self.target = (x, y)

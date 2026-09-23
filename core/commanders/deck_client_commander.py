@@ -59,6 +59,13 @@ class DeckClientCommander:
     # замеру рвал бы связь на каждом таком мигании.
     DISPLAY_OFF_CONFIRMATIONS = 2
     SERVER_SILENCE_SECONDS = 12
+    # Захват курсора игрой проверяется часто: меню Steam открыли — курсор должен сразу стать
+    # свободным, иначе человек упрётся в край, которого на экране уже нет.
+    CAPTURE_CHECK_SECONDS = 0.25
+    # Пока игра держит курсор, серверу объявлен большой экран, а курсор сервера возвращается
+    # в его центр, не доходя до края: край — это переход на компьютер и упор камеры.
+    VIRTUAL_SIZE = 16000
+    RECENTER_AT = 3000
 
     def __init__(self, hosts, port, name, log, pointer=POINTER_AUTO, discovery=None,
                  sensor=None, device_factory=None, layouts=None):
@@ -97,6 +104,13 @@ class DeckClientCommander:
         self._languages_applied = None
         self._next_mode_check = 0.0
         self._next_display_check = 0.0
+        self._next_capture_check = 0.0
+        self.captured = False
+        self._wire = None
+        self._server_pos = None
+        self._awaiting_centre = False
+        self._announced_virtual = False
+        self._stale_until_inside = False
 
     # ---- журнал и состояние ---------------------------------------------------
 
@@ -157,7 +171,87 @@ class DeckClientCommander:
             on = self.sensor.display_on()
             self._display_off_count = 0 if on else self._display_off_count + 1
             self.set_status(display_on=on)
+        if now >= self._next_capture_check:
+            self._next_capture_check = now + self.CAPTURE_CHECK_SECONDS
+            self._watch_capture()
         return self._display_off_count < self.DISPLAY_OFF_CONFIRMATIONS
+
+    # ---- захват курсора игрой -------------------------------------------------
+
+    def _watch_capture(self):
+        """Игра спрятала курсор — захват; показала (меню Steam, меню игры) — отпустить.
+
+        Ответ датчика «не знаю» (сбой X11) состояния не меняет: отпускание посреди игры бросило
+        бы камеру, а ложный захват на рабочем столе исключён проверкой режима.
+        """
+        if self.mode == DESKTOP or self.officer.pointer != POINTER_REL:
+            want = False
+        else:
+            answer = getattr(self.sensor, "cursor_captured", lambda: None)()
+            if answer is None:
+                return
+            want = bool(answer)
+        if want == self.captured:
+            return
+        self.captured = want
+        self.set_status(captured=want)
+        self.log("игра %s курсор — %s" % (
+            "захватила" if want else "отпустила",
+            "мышь крутит камеру без упора в край, на компьютер курсор не уходит (выход — Alt+Tab)"
+            if want else "курсор свободен, край экрана снова ведёт на компьютер"))
+        if self._wire is None:
+            return
+        if want:
+            self._announce_shape()
+        else:
+            # Курсор остаётся там, где был: модель положения велась и в захвате. Спрятанный
+            # бездействием курсор игра не двигала, и прыжок в центр был бы лишним.
+            cursor = self.officer.cursor
+            if cursor is None:
+                self.officer.recalibrate()
+                cursor = (self.width // 2, self.height // 2)
+                self.officer.move_abs(*cursor)
+            self._announce_shape(cursor)
+            self._stale_until_inside = True
+
+    def _shape(self, cursor=None):
+        if self.captured:
+            size = self.VIRTUAL_SIZE
+            return size, size, size // 2, size // 2
+        mx, my = cursor if cursor is not None else (self.width // 2, self.height // 2)
+        return self.width, self.height, mx, my
+
+    def _announce_shape(self, cursor=None):
+        """Сообщить серверу форму экрана и где курсор. Deskflow принимает её в любой момент
+        сеанса (`ClientProxy1_0::parseMessage`, DINF → `handleShapeChanged`) и ставит свой
+        курсор туда, куда сказал клиент; кадры, посланные до этого, ещё идут от старой точки."""
+        width, height, mx, my = self._shape(cursor)
+        self._wire.send(b"DINF" + struct.pack(">hhhhhhh", 0, 0, width, height, 0, mx, my))
+        self._announced_virtual = self.captured
+        if self.captured:
+            self._awaiting_centre = True
+
+    def _captured_move(self, x, y):
+        """Положение от сервера в захвате — только разница с прошлым, сырым смещением.
+
+        После объявления нового центра кадры сервера ещё какое-то время идут от старой точки.
+        Переход на новый центр виден по самому кадру: он близко к центру, а старые — дальше
+        порога. До перехода новый центр не объявляется повторно: лишний DINF сбил бы отсчёт.
+        """
+        centre = self.VIRTUAL_SIZE // 2
+        near = abs(x - centre) < self.RECENTER_AT // 2 and abs(y - centre) < self.RECENTER_AT // 2
+        if self._awaiting_centre and near:
+            self._awaiting_centre = False
+            base = (centre, centre)
+        else:
+            base = self._server_pos or (x, y)
+        dx, dy = x - base[0], y - base[1]
+        self._server_pos = (x, y)
+        if abs(dx) < self.RECENTER_AT and abs(dy) < self.RECENTER_AT:
+            self.officer.move_rel_raw(dx, dy)
+        far = abs(x - centre) > self.RECENTER_AT or abs(y - centre) > self.RECENTER_AT
+        if far and not self._awaiting_centre:
+            self._announce_shape()
 
     def _follow_pc_languages(self):
         """Раскладки Deck'а — по языкам компьютера: клавиши приходят физическими."""
@@ -214,10 +308,24 @@ class DeckClientCommander:
         elif code == b"QINF":
             width, height = self.sensor.screen_size()
             officer.set_screen(width, height)
-            wire.send(b"DINF" + struct.pack(">hhhhhhh", 0, 0, width, height, 0, width // 2, height // 2))
+            self._wire = wire
+            self._announce_shape()
         elif code == b"CINN":
             mask = u2(msg, 12) if len(msg) >= 14 else 0
-            officer.enter(i2(msg, 4), i2(msg, 6), mask)
+            x, y = i2(msg, 4), i2(msg, 6)
+            if self._announced_virtual:
+                # Сервер считал экран большим: точка входа — в его масштабе, переводится в настоящий.
+                x = x * self.width // self.VIRTUAL_SIZE
+                y = y * self.height // self.VIRTUAL_SIZE
+            self._wire = wire
+            officer.enter(x, y, mask)
+            if self.captured:
+                # Сервер ставит курсор у края, откуда пришёл: его курсор уводится в центр большого
+                # экрана, иначе первое же движение назад вернуло бы управление на компьютер.
+                self._server_pos = None
+                self._announce_shape()
+            elif self._announced_virtual:
+                self._announce_shape((x, y))
             self.set_status(on_screen=True, held_keys=officer.held_keys())
             self.log("экран Deck'а активен, курсор здесь")
         elif code == b"COUT":
@@ -225,9 +333,19 @@ class DeckClientCommander:
             self.set_status(on_screen=False, held_keys=[])
             self.log("управление вернулось на компьютер")
         elif code == b"DMMV":
-            officer.move_abs(i2(msg, 4), i2(msg, 6))
+            x, y = i2(msg, 4), i2(msg, 6)
+            if self.captured:
+                self._captured_move(x, y)
+            elif self._stale_until_inside and not (0 <= x < self.width and 0 <= y < self.height):
+                pass            # кадр в масштабе большого экрана, посланный до отпускания
+            else:
+                self._stale_until_inside = False
+                officer.move_abs(x, y)
         elif code == b"DMRM":
-            officer.move_rel(i2(msg, 4), i2(msg, 6))
+            if self.captured:
+                officer.move_rel_raw(i2(msg, 4), i2(msg, 6))
+            else:
+                officer.move_rel(i2(msg, 4), i2(msg, 6))
         elif code in (b"DMDN", b"DMUP"):
             button = MOUSE_BUTTONS.get(msg[4])
             if button:
@@ -240,6 +358,8 @@ class DeckClientCommander:
                 physical = scan_to_key(u2(msg, 8)) is not None
                 self.log("клавиши приходят %s" % ("физическими — язык выбирает раскладка Deck'а, Alt+Shift"
                                                   if physical else "символами — сервер не прислал скан-код"))
+            if code == b"DKDN" and self._is_alt_tab(msg):
+                raise SessionEnded("Alt+Tab — управление возвращено на компьютер")
             officer.handle_key(code, msg)
             self.set_status(held_keys=officer.held_keys())
         elif code in (b"DSOP", b"CROP", b"CSEC", b"CCLP", b"DCLP", b"LSYN", b"SECN", b"DDRG", b"DFTR"):
@@ -248,6 +368,21 @@ class DeckClientCommander:
             raise ConnectionResetError("сервер закрыл сессию")
         elif code in (b"EBSY", b"EUNK", b"EBAD", b"EICV"):
             raise ConnectionResetError("сервер отверг клиента: %s" % code.decode())
+
+    @staticmethod
+    def _is_alt_tab(msg):
+        """Tab при зажатом Alt — выход на компьютер из игры и с рабочего стола Deck'а.
+
+        Deck не может приказать серверу переключить экран, но сервер сам возвращает курсор на
+        компьютер, когда клиент уходит из сеанса. Сеанс поэтому снимается и тут же поднимается
+        заново: переход занимает доли секунды, а клавиша работает и там, где курсора нет.
+        """
+        if len(msg) < 8:
+            return False
+        key_id, mask = u2(msg, 4), u2(msg, 6)
+        button = u2(msg, 8) if len(msg) >= 10 else 0
+        is_tab = (button & 0xFF) == 0x0F if button else key_id in (0xEF09, 0xEE20)
+        return is_tab and bool(mask & 0x0004)
 
     # ---- сеанс ------------------------------------------------------------------
 
@@ -294,6 +429,11 @@ class DeckClientCommander:
                     self.handle(wire, msg)
         finally:
             sel.close()
+            self._wire = None
+            self._server_pos = None
+            self._awaiting_centre = False
+            self._announced_virtual = False
+            self._stale_until_inside = False
             self.officer.leave()
             self.set_status(on_screen=False, held_keys=[])
             sock.close()

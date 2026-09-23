@@ -35,8 +35,9 @@ echo "== SteamDeck-KVM pre-push 3/4: PC window layout"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$ROOT/private_tools/scripts/check_window_layout_script.ps1" || exit 1
 
 echo "== SteamDeck-KVM pre-push 4/4: release and public repository rules"
-if [ -n "$SHARED" ] && [ -f "$SHARED/scripts/check-github-repo.py" ]; then
-    "$PY" -X utf8 "$SHARED/scripts/check-github-repo.py" --корень "$ROOT" || {
+CHECKER="$SHARED/.code/scripts/checks/check-github-repo.py"
+if [ -n "$SHARED" ] && [ -f "$CHECKER" ]; then
+    "$PY" -X utf8 "$CHECKER" --корень "$ROOT" || {
         echo "PUSH REJECTED: repository breaks the public repository rules."
         exit 1
     }

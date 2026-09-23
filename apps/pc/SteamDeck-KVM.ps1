@@ -411,29 +411,13 @@ function Test-DeckConnected {
     return $false
 }
 
-# ==== Защита: курсор не уходит в уснувший Deck ====================================
-# Сервер Deskflow отсекает замолчавший клиент сам, но через девять секунд (3 с × 3 пропуска).
-# Все эти секунды уснувший Deck числится подключённым, и мышь, доведённая до края, уходит в
-# чёрный экран. Deck отвечает на маячок раз в две секунды — его молчание видно раньше. Молчит
-# при живом соединении — сервер перезапускается, и соединение с уснувшим Deck'ом рвётся сразу.
-$script:AppStarted = Get-Date
-$script:LastStaleRestart = [datetime]::MinValue
-
-function Проверить-Уснувший-Deck {
-    if (-not (Test-ServerRunning)) { return }
-    # Судить можно только о Deck'е, который в этом запуске уже отвечал: иначе прежний клиент
-    # без маячка перезапускал бы сервер каждые полминуты.
-    if ($script:DeckSeen -lt $script:AppStarted) { return }
-    $молчит = ((Get-Date) - $script:DeckSeen).TotalSeconds
-    if ($молчит -lt 8) { return }
-    if (((Get-Date) - $script:LastStaleRestart).TotalSeconds -lt 30) { return }
-    if (-not (Test-DeckConnected)) { return }
-    $script:LastStaleRestart = Get-Date
-    Write-Log ('Deck молчит {0:N0} с при живом соединении — сервер перезапущен, курсор не уйдёт в уснувший Deck' -f $молчит)
-    Stop-Server
-    Start-Sleep -Milliseconds 300
-    Start-Server
-}
+# ==== Уснувший Deck ==========================================================
+# Своего сторожа здесь нет намеренно. Прежний перезапускал сервер, когда Deck молчал на маячок
+# восемь секунд при живом соединении, — выигрыш в одну секунду против защиты самого Deskflow
+# (клиент без ответа отсекается через девять секунд: 3 с × 3 пропуска). По Wi-Fi широковещательный
+# маячок и ответы на него теряются пачками, и 22.09.2026 сторож девять раз за полчаса оборвал
+# живой сеанс — это и было «включил, а связь рвётся». Уснувший Deck уходит из сеанса по
+# защите Deskflow, погасший экран Deck снимает связь сам.
 
 # ==== Обновление из выпусков GitHub, без git ======================================
 # Проверка идёт сама: при старте и раз в шесть часов. Кнопка «Обновить» появляется, только когда
@@ -606,12 +590,13 @@ function Показать-Плашку {
 function Update-View {
     $работает = Test-ServerRunning
     $подключён = $работает -and (Test-DeckConnected)
+    if (Get-Command Обновить-Окно-Deck -ErrorAction SilentlyContinue) { Обновить-Окно-Deck $подключён }
     $видели = ((Get-Date) - $script:DeckSeen).TotalSeconds -lt 15
 
     if ($подключён) {
         $ui.Точка.ForeColor = $C.Успех
         $ui.Состояние.Text = 'Работает — Deck подключён'
-        $ui.Подсказка.Text = 'Доведите курсор до края экрана или нажмите Ctrl+Alt+→. Обратно — Ctrl+Alt+←.'
+        $ui.Подсказка.Text = 'На Deck — край экрана или Alt+Tab на окно «Steam Deck». Обратно — Alt+Tab на Deck''е.'
     } elseif ($работает -and $видели) {
         $ui.Точка.ForeColor = $C.Ожидание
         $ui.Состояние.Text = 'Включено — Deck отвечает'
@@ -644,7 +629,7 @@ function Update-View {
     }
 
     $ui.Факты['Этот компьютер'].Text = '{0} · {1}' -f $env:COMPUTERNAME, (Get-LocalAddress)
-    $ui.Факты['Переход'].Text = 'край экрана · Ctrl+Alt+→ и Ctrl+Alt+←'
+    $ui.Факты['Переход'].Text = 'край экрана · Alt+Tab на «Steam Deck» · Ctrl+Alt+стрелки'
     $ui.Факты['Версия'].Text = if ($IsDevCheckout) { "$Version · рабочая копия" } else { $Version }
     (Кнопка 'Забыть Deck').Enabled = [bool]$script:Pair.deck_id
 
@@ -788,6 +773,91 @@ function Выйти-Из-Приложения {
     [System.Windows.Forms.Application]::Exit()
 }
 
+# ==== Steam Deck — окно в списке Alt+Tab =====================================
+# Переход на Deck по Alt+Tab, как на соседнее окно. Горячая клавиша Deskflow на Alt+Tab отняла бы
+# у Windows переключение окон целиком: сервер перехватывает сочетание на любом экране. Поэтому
+# Deck стоит в списке Alt+Tab и на панели задач отдельным невидимым окном «Steam Deck» со значком
+# приложения. Выбрали его — фокус возвращается окну, где человек работал, а курсор уводится за
+# край экрана в сторону Deck'а: сервер переводит клавиатуру и мышь сам, как при движении мыши.
+# Программный курсор сервер видит, пока управление на ПК (`MSWindowsHook.cpp`: программный ввод
+# пропускается только на чужом экране). Обратно — Alt+Tab на Deck'е: служба Deck'а снимает сеанс,
+# и сервер возвращает курсор на ПК.
+Add-Type -Namespace Win32 -Name DeckJump -MemberDefinition @'
+[DllImport("user32.dll")] public static extern void mouse_event(int flags, int dx, int dy, int data, IntPtr extra);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+'@
+
+$script:ПрежнееОкно = [IntPtr]::Zero
+$script:ПрыжокИдёт = $false
+
+function Сторона-Deck {
+    # Сторона берётся из той же раскладки, что читает сервер: иначе курсор ушёл бы не в тот край.
+    $имяПК = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'pc' }
+    try {
+        $текст = [System.IO.File]::ReadAllText($ScreensConf)
+        if ($текст -match ('(?ms)^\s*' + [regex]::Escape($имяПК) + ':\s*\r?\n\s*left\s*=\s*steamdeck')) { return 'left' }
+    } catch { Write-Log ('сторона Deck''а не прочитана, беру правую: ' + $_.Exception.Message) }
+    return 'right'
+}
+
+function Перейти-На-Deck {
+    if ($script:ПрыжокИдёт) { return }
+    $script:ПрыжокИдёт = $true
+    try {
+        [Win32.DeckJump]::ShowWindow($deckForm.Handle, 7) | Out-Null     # SW_SHOWMINNOACTIVE — снова свёрнуто
+        if ($script:ПрежнееОкно -ne [IntPtr]::Zero) { [Win32.DeckJump]::SetForegroundWindow($script:ПрежнееОкно) | Out-Null }
+        $справа = (Сторона-Deck) -eq 'right'
+        $экраны = [System.Windows.Forms.Screen]::AllScreens
+        $край = if ($справа) { $экраны | Sort-Object { $_.Bounds.Right } -Descending | Select-Object -First 1 }
+                else { $экраны | Sort-Object { $_.Bounds.Left } | Select-Object -First 1 }
+        $x = if ($справа) { $край.Bounds.Right - 2 } else { $край.Bounds.Left + 1 }
+        $y = $край.Bounds.Top + [int]($край.Bounds.Height / 2)
+        [Win32.DeckJump]::SetCursorPos($x, $y) | Out-Null
+        $шаг = if ($справа) { 40 } else { -40 }
+        for ($i = 0; $i -lt 6; $i++) {
+            [Win32.DeckJump]::mouse_event(1, $шаг, 0, 0, [IntPtr]::Zero)   # MOUSEEVENTF_MOVE — видит перехват сервера
+            Start-Sleep -Milliseconds 15
+        }
+        Write-Log 'выбрано окно «Steam Deck» — курсор уведён на Deck'
+    } catch {
+        Write-Log ('переход на Deck по Alt+Tab не удался: ' + $_.Exception.Message)
+    } finally {
+        $script:ПрыжокИдёт = $false
+    }
+}
+
+$deckForm = New-Object System.Windows.Forms.Form
+$deckForm.Text = 'Steam Deck'
+$deckForm.ShowInTaskbar = $true
+$deckForm.FormBorderStyle = 'None'
+$deckForm.Opacity = 0
+$deckForm.StartPosition = 'Manual'
+$deckForm.Location = New-Object System.Drawing.Point(-32000, -32000)
+$deckForm.Size = New-Object System.Drawing.Size(1, 1)
+$deckForm.Icon = Значок-Трея
+$deckForm.Add_Activated({ Перейти-На-Deck })
+$script:DeckWindowShown = $false
+
+function Обновить-Окно-Deck([bool]$Подключён) {
+    # Окно есть в списке, только пока Deck подключён: иначе Alt+Tab вёл бы в никуда.
+    if ($Подключён -eq $script:DeckWindowShown) { return }
+    $script:DeckWindowShown = $Подключён
+    if ($Подключён) { [Win32.DeckJump]::ShowWindow($deckForm.Handle, 7) | Out-Null }   # свёрнуто, без фокуса
+    else { [Win32.DeckJump]::ShowWindow($deckForm.Handle, 0) | Out-Null }              # SW_HIDE
+}
+
+# Окно, где человек работал до Alt+Tab, запоминается часто: после перехода на Deck и возврата
+# фокус должен стоять там же, а не на невидимом окне.
+$focusTimer = New-Object System.Windows.Forms.Timer
+$focusTimer.Interval = 250
+$focusTimer.Add_Tick({
+    $окно = [Win32.DeckJump]::GetForegroundWindow()
+    if ($окно -ne [IntPtr]::Zero -and $окно -ne $deckForm.Handle) { $script:ПрежнееОкно = $окно }
+})
+
 # ==== Часы приложения ========================================================
 # Один таймер на всё: рассылка маячка, разбор ответов Deck'а, сверка вида с фактом.
 $timer = New-Object System.Windows.Forms.Timer
@@ -800,7 +870,6 @@ $timer.Add_Tick({
             Send-Beacon (Test-ServerRunning)
         }
         if ($ShowSignal.WaitOne(0)) { Show-Window }
-        Проверить-Уснувший-Deck
         if ((Get-Date) -ge $script:NextUpdateCheck) {
             $script:NextUpdateCheck = (Get-Date).AddHours(6)
             Начать-Проверку-Обновления
@@ -828,6 +897,7 @@ if ((Ensure-Config) -and (Test-ServerRunning)) {
 Open-Beacon
 Update-View
 $timer.Start()
+$focusTimer.Start()
 
 # Первое окно процесса Windows показывает так, как велено в STARTUPINFO
 # запускающего, а запускает нас VBS со скрытым окном (иначе мигала бы консоль).

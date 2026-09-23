@@ -298,3 +298,138 @@ def test_deck_layouts_follow_pc_languages_once():
     assert Layouts.calls == ["en-US,ru-RU"], "одни и те же языки применяются один раз"
     assert any("Alt+Shift" in line for line in client.lines)
     assert any("после перезапуска игрового режима" in line for line in client.lines)
+
+
+# ---- захват курсора игрой и Alt+Tab ---------------------------------------------------------
+
+class FakeWire:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, payload):
+        self.sent.append(payload)
+
+    def shapes(self):
+        return [struct.unpack(">hhhhhhh", p[4:]) for p in self.sent if p[:4] == b"DINF"]
+
+
+def rel_moves(device):
+    return [(code, value) for etype, *rest in device.events if etype == EV_REL
+            for code, value in [rest] if code in (0, 1)]
+
+
+def captured_client():
+    sensor = FakeSensor(mode="game", captured=False)
+    client = make(sensor=sensor)
+    wire = FakeWire()
+    client.handle(wire, b"QINF")
+    client.handle(wire, b"CINN" + struct.pack(">hhih", 0, 400, 1, 0))
+    sensor.captured = True
+    client._next_capture_check = 0
+    client.watch_session(now=10.0)
+    return client, sensor, wire
+
+
+def test_game_capture_announces_big_screen_centred():
+    client, _, wire = captured_client()
+    assert client.captured and client.status.captured
+    size, centre = client.VIRTUAL_SIZE, client.VIRTUAL_SIZE // 2
+    assert wire.shapes()[-1] == (0, 0, size, size, 0, centre, centre)
+
+
+def test_captured_moves_go_raw_without_edge_and_recentre():
+    client, _, wire = captured_client()
+    centre = client.VIRTUAL_SIZE // 2
+    client.mouse.events.clear()
+    # Далеко вправо: реальный экран кончился бы на 1280, игра получает все смещения.
+    x = centre
+    shapes = len(wire.shapes())
+    for _ in range(40):
+        x += 100
+        client.handle(wire, b"DMMV" + struct.pack(">hh", x, centre))
+        if len(wire.shapes()) > shapes:        # сервер принял новый центр и ведёт курсор от него
+            shapes, x = len(wire.shapes()), centre
+    moved = sum(value for code, value in rel_moves(client.mouse) if code == 0)
+    assert moved == 4000, moved
+    # Курсор сервера ушёл от центра дальше порога — центр объявлен заново, края сервер не увидит.
+    assert wire.shapes()[-1][5:] == (centre, centre)
+
+
+def test_frames_around_recentre_give_true_motion_and_one_announce():
+    client, _, wire = captured_client()
+    centre = client.VIRTUAL_SIZE // 2
+    client.handle(wire, b"DMMV" + struct.pack(">hh", centre + 5, centre))     # сервер перешёл на центр
+    far = centre + client.RECENTER_AT + 10
+    client.handle(wire, b"DMMV" + struct.pack(">hh", far, centre))            # быстрый рывок → новый центр
+    announced = len(wire.shapes())
+    client.mouse.events.clear()
+    # Сервер ещё не принял новый центр: кадры от старой точки — настоящее движение, DINF не повторяется.
+    client.handle(wire, b"DMMV" + struct.pack(">hh", far + 20, centre))
+    client.handle(wire, b"DMMV" + struct.pack(">hh", far + 40, centre))
+    # Сервер принял новый центр: кадр рядом с центром — смещение от центра, а не откат назад.
+    client.handle(wire, b"DMMV" + struct.pack(">hh", centre + 15, centre))
+    assert [v for c, v in rel_moves(client.mouse) if c == 0] == [20, 20, 15]
+    assert len(wire.shapes()) == announced
+
+
+def test_unknown_answer_keeps_capture_without_camera_jerk():
+    client, sensor, wire = captured_client()
+    client.mouse.events.clear()
+    sensor.captured = None                                   # сбой чтения X11
+    client._next_capture_check = 0
+    client.watch_session(now=20.0)
+    assert client.captured and rel_moves(client.mouse) == []
+
+
+def test_release_keeps_cursor_in_place_and_drops_stale_frames():
+    client, sensor, wire = captured_client()
+    client.handle(wire, b"DMMV" + struct.pack(">hh", client.VIRTUAL_SIZE // 2 + 5, client.VIRTUAL_SIZE // 2))
+    client.handle(wire, b"DMMV" + struct.pack(">hh", client.VIRTUAL_SIZE // 2 + 105, client.VIRTUAL_SIZE // 2))
+    place = client.officer.cursor
+    sensor.captured = False
+    client._next_capture_check = 0
+    client.watch_session(now=20.0)
+    assert not client.captured
+    assert wire.shapes()[-1] == (0, 0, 1280, 800, 0) + place
+    client.handle(wire, b"DMMV" + struct.pack(">hh", 8050, 8010))           # кадр до отпускания
+    assert client.officer.cursor == place
+    client.handle(wire, b"DMMV" + struct.pack(">hh", 100, 100))
+    assert client.officer.cursor == (100, 100)
+
+
+def test_release_while_on_pc_tells_server_real_screen():
+    client, sensor, wire = captured_client()
+    client.handle(wire, b"COUT")
+    sensor.captured = False
+    client._next_capture_check = 0
+    client.watch_session(now=20.0)
+    assert wire.shapes()[-1][:4] == (0, 0, 1280, 800)
+    client.handle(wire, b"CINN" + struct.pack(">hhih", 0, 300, 1, 0))
+    assert client.officer.cursor == (0, 300)
+
+
+def test_desktop_never_captures():
+    client = make(sensor=FakeSensor(mode="desktop", captured=True))
+    client._next_capture_check = 0
+    client.watch_session(now=1.0)
+    assert not client.captured
+
+
+def test_entering_while_captured_goes_straight_to_centre():
+    client, _, wire = captured_client()
+    client.handle(wire, b"COUT")
+    wire.sent.clear()
+    client.handle(wire, b"CINN" + struct.pack(">hhih", 0, 400, 1, 0))
+    centre = client.VIRTUAL_SIZE // 2
+    assert wire.shapes() == [(0, 0, client.VIRTUAL_SIZE, client.VIRTUAL_SIZE, 0, centre, centre)]
+
+
+def test_alt_tab_ends_session_to_return_to_pc():
+    client = make(sensor=FakeSensor(mode="game"))
+    wire = FakeWire()
+    client.handle(wire, b"CINN" + struct.pack(">hhih", 0, 400, 1, 0x0004))
+    with pytest.raises(SessionEnded):
+        client.handle(wire, b"DKDN" + struct.pack(">HHH", 0xEF09, 0x0004, 0x0F))
+    # Tab без Alt — обычная клавиша.
+    client.handle(wire, b"DKDN" + struct.pack(">HHH", 0xEF09, 0, 0x0F))
+    assert K["TAB"] in client.officer.pressed.values()

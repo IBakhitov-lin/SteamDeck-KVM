@@ -39,10 +39,14 @@ class FakeDevice:
 
 
 class FakeSensor:
-    def __init__(self, mode="desktop", display=True, size=(1280, 800)):
+    def __init__(self, mode="desktop", display=True, size=(1280, 800), captured=None):
         self.mode = mode
         self.display = display
         self.size = size
+        self.captured = captured
+
+    def cursor_captured(self):
+        return self.captured
 
     def screen_size(self):
         return self.size
