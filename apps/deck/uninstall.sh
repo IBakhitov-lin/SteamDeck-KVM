@@ -23,7 +23,9 @@ systemctl --user disable --now "$UNIT" >/dev/null 2>&1 || true
 rm -f "$UNIT_DIR/$UNIT"
 systemctl --user daemon-reload >/dev/null 2>&1 || true
 pkill -f "steamdeck-kvm-app.qml" >/dev/null 2>&1 || true
+pkill -f "steamdeck-kvm-pc-window.qml" >/dev/null 2>&1 || true
 rm -f "$DATA_HOME/applications/steamdeck-kvm.desktop" "$HOME/Desktop/SteamDeck-KVM.desktop"
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/steamdeck-kvm-pc-window.desktop"
 rm -rf "$APP_HOME"
 
 if [ "$MODE" = "--erase-state" ]; then

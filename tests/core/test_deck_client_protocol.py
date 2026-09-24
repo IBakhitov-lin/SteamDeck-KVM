@@ -424,12 +424,61 @@ def test_entering_while_captured_goes_straight_to_centre():
     assert wire.shapes() == [(0, 0, client.VIRTUAL_SIZE, client.VIRTUAL_SIZE, 0, centre, centre)]
 
 
-def test_alt_tab_ends_session_to_return_to_pc():
-    client = make(sensor=FakeSensor(mode="game"))
-    wire = FakeWire()
+class FakeDiscoveryToPc:
+    """Знакомство без сети: считает просьбы «верни управление» и несёт флаги компьютера."""
+
+    def __init__(self, alttab=True):
+        self.flags = {"alttab": alttab}
+        self.asked = 0
+        self.peer = self.peer_name = self.address = None
+        self.languages = None
+
+    def send_to_pc(self):
+        self.asked += 1
+        return True
+
+    def recall(self):
+        return None
+
+
+def alt_tab(client, wire):
     client.handle(wire, b"CINN" + struct.pack(">hhih", 0, 400, 1, 0x0004))
-    with pytest.raises(SessionEnded):
-        client.handle(wire, b"DKDN" + struct.pack(">HHH", 0xEF09, 0x0004, 0x0F))
-    # Tab без Alt — обычная клавиша.
-    client.handle(wire, b"DKDN" + struct.pack(">HHH", 0xEF09, 0, 0x0F))
-    assert K["TAB"] in client.officer.pressed.values()
+    client.handle(wire, b"DKDN" + struct.pack(">HHH", 0xEF09, 0x0004, 0x0F))
+
+
+def test_alt_tab_in_game_asks_pc_to_take_control_back_without_dropping_session():
+    """В игре окон нет: Alt+Tab — просьба компьютеру вернуть управление; Tab в игру не уходит."""
+    client = make(sensor=FakeSensor(mode="game"))
+    client.discovery = FakeDiscoveryToPc()
+    wire = FakeWire()
+    alt_tab(client, wire)
+    assert client.discovery.asked == 1
+    assert K["TAB"] not in client.officer.pressed.values()
+    client.handle(wire, b"DKUP" + struct.pack(">HHH", 0xEF09, 0x0004, 0x0F))
+    assert not client._swallowed, "отпускание проглоченного Tab тоже проглочено и забыто"
+
+
+def test_alt_tab_on_desktop_reaches_deck_windows():
+    """На рабочем столе Alt+Tab — клавиши для окон Deck'а; среди них окно «Компьютер»."""
+    client = make(sensor=FakeSensor(mode="desktop"))
+    client.discovery = FakeDiscoveryToPc()
+    alt_tab(client, FakeWire())
+    assert K["TAB"] in client.officer.pressed.values() and client.discovery.asked == 0
+
+
+def test_alt_tab_switched_off_on_pc_reaches_the_game():
+    client = make(sensor=FakeSensor(mode="game"))
+    client.discovery = FakeDiscoveryToPc(alttab=False)
+    alt_tab(client, FakeWire())
+    assert K["TAB"] in client.officer.pressed.values() and client.discovery.asked == 0
+
+
+def test_window_button_to_pc_needs_connection():
+    client = make()
+    client.discovery = FakeDiscoveryToPc()
+    ok, _ = client.request("to_pc")
+    assert not ok and client.discovery.asked == 0
+    client.set_status(state="connected")
+    ok, _ = client.request("to_pc")
+    client.run_actions()
+    assert ok and client.discovery.asked == 1

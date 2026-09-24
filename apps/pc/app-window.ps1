@@ -13,87 +13,32 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# ==== Контракт ===============================================================
-# Порядок поиска: палитра в архиве выпуска (lib\) → палитра в рабочей копии (apps\palette.json).
-$script:PalettePath = $null
-foreach ($кандидат in @((Join-Path $PSScriptRoot 'lib\palette.json'),
-                        (Join-Path $PSScriptRoot '..\palette.json'))) {
-    if (Test-Path -LiteralPath $кандидат) { $script:PalettePath = $кандидат; break }
+# ==== Общая библиотека — единственный источник вида и общих частей окна =====
+# lib\ — копии общей библиотеки, их кладёт сборщик выпуска; руками они не правятся. Цвета, числа,
+# радиусы и шрифт — функциями Цвет-Контракта, Число-Оболочки, Радиус-Контракта, Шрифт; своих
+# запасных чисел нет.
+foreach ($общее in @('app-shell.ps1', 'tray-place.ps1')) {
+    $путьОбщего = Join-Path $PSScriptRoot ('lib\' + $общее)
+    if (-not (Test-Path -LiteralPath $путьОбщего)) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void][System.Windows.Forms.MessageBox]::Show(('SteamDeck-KVM не запущен: нет общей библиотеки' + [Environment]::NewLine + $путьОбщего), 'SteamDeck-KVM')  # системный диалог: без общей библиотеки своего окна не собрать — это единственный способ сказать причину
+        throw ('нет общей библиотеки: ' + $путьОбщего)
+    }
+    . $путьОбщего
 }
 
-$script:Contract = $null
-try { $script:Contract = Get-Content -LiteralPath $script:PalettePath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
-$script:Theme = $null
-try { $script:Theme = $script:Contract.'тёмная' } catch { }
-
-function ЦветИзHex([string]$hex, [int[]]$запас) {
-    try {
-        $h = $hex.TrimStart('#')
-        return [System.Drawing.Color]::FromArgb(
-            [Convert]::ToInt32($h.Substring(0, 2), 16),
-            [Convert]::ToInt32($h.Substring(2, 2), 16),
-            [Convert]::ToInt32($h.Substring(4, 2), 16))
-    } catch { return [System.Drawing.Color]::FromArgb($запас[0], $запас[1], $запас[2]) }
-}
-
-function ИзТемы([string]$имя, [int[]]$запас) {
-    if ($script:Theme -and $script:Theme.$имя) { return ЦветИзHex $script:Theme.$имя $запас }
-    return [System.Drawing.Color]::FromArgb($запас[0], $запас[1], $запас[2])
-}
-
-$C_BG     = ИзТемы 'фон'          @(21, 21, 23)
-$C_CARD   = ИзТемы 'карточка'     @(30, 31, 35)
-$C_HI     = ИзТемы 'подсветка'    @(40, 42, 47)
-$C_LINE   = ИзТемы 'линия'        @(48, 50, 56)
-$C_TEXT   = ИзТемы 'текст'        @(240, 241, 244)
-$C_DIM    = ИзТемы 'текст_второй' @(160, 165, 173)
-$C_ACCENT = ИзТемы 'акцент'       @(110, 170, 255)
-$C_OK     = ИзТемы 'успех'        @(70, 200, 120)
-$C_WAIT   = ИзТемы 'ожидание'     @(230, 180, 70)
-$C_ALARM  = ИзТемы 'тревога'      @(240, 133, 122)
-
-# Гарнитура — ОДНОЙ функцией на всё окно. Восемнадцать упоминаний строкой в
-# соседнем приложении означали, что смена шрифта в контракте не меняет ничего.
-$script:FontName = 'Segoe UI'
-try { if ($script:Contract.'типографика'.'приложение') { $script:FontName = [string]$script:Contract.'типографика'.'приложение' } } catch { }
-
-$script:R_CARD = 16
-$script:R_BTN = 8
-try { if ($script:Contract.'радиусы'.'карточка') { $script:R_CARD = [int]$script:Contract.'радиусы'.'карточка' } } catch { }
-try { if ($script:Contract.'радиусы'.'кнопка')   { $script:R_BTN  = [int]$script:Contract.'радиусы'.'кнопка' } } catch { }
-
-# Размеры меню, кнопок и полей — из раздела «оболочка» контракта: одни числа на все приложения,
-# иначе меню и окна разных приложений расходятся по размеру втрое (канон оболочки app_canon.md).
-function ИзОболочки([string]$имя, [double]$запас) {
-    try { if ($script:Contract.'оболочка'.$имя) { return [double]$script:Contract.'оболочка'.$имя } } catch { }
-    return $запас
-}
-
-function Шрифт([double]$кегль, [bool]$жирный = $false) {
-    if ($жирный) { $стиль = [System.Drawing.FontStyle]::Bold } else { $стиль = [System.Drawing.FontStyle]::Regular }
-    return New-Object System.Drawing.Font($script:FontName, $кегль, $стиль)
-}
-
-function Скруглить($контрол, [int]$радиус) {
-    # WinForms не знает скругления. Единственный способ, не ломающий растяжение
-    # по якорю, — область отсечения; она пересчитывается на КАЖДОЕ изменение
-    # размера, иначе обрезает контрол по прежнему размеру, пока окно тянут.
-    try {
-        $ш = $контрол.Width; $в = $контрол.Height
-        if ($ш -le 2 -or $в -le 2) { return }
-        $r = [Math]::Min($радиус, [int]([Math]::Min($ш, $в) / 2))
-        if ($r -le 1) { $контрол.Region = $null; return }
-        $d = $r * 2
-        $путь = New-Object System.Drawing.Drawing2D.GraphicsPath
-        $путь.AddArc(0, 0, $d, $d, 180, 90)
-        $путь.AddArc(($ш - $d), 0, $d, $d, 270, 90)
-        $путь.AddArc(($ш - $d), ($в - $d), $d, $d, 0, 90)
-        $путь.AddArc(0, ($в - $d), $d, $d, 90, 90)
-        $путь.CloseFigure()
-        $контрол.Region = New-Object System.Drawing.Region($путь)
-        $путь.Dispose()
-    } catch { }
-}
+$C_BG     = Цвет-Контракта 'фон'
+$C_CARD   = Цвет-Контракта 'карточка'
+$C_HI     = Цвет-Контракта 'подсветка'
+$C_LINE   = Цвет-Контракта 'линия'
+$C_TEXT   = Цвет-Контракта 'текст'
+$C_DIM    = Цвет-Контракта 'текст_второй'
+$C_ACCENT = Цвет-Контракта 'акцент'
+$C_OK     = Цвет-Контракта 'успех'
+$C_WAIT   = Цвет-Контракта 'ожидание'
+$C_ALARM  = Цвет-Контракта 'тревога'
+$script:R_CARD = Радиус-Контракта 'карточка'
+$script:R_BTN  = Радиус-Контракта 'кнопка'
 
 # Обработчика Resize здесь нет намеренно: окно неизменяемого размера
 # (FormBorderStyle = FixedSingle, MaximizeBox = false), контролы не тянутся, и
@@ -105,15 +50,15 @@ function Скруглить($контрол, [int]$радиус) {
 # точка, заголовок и цвет тумблера. Цвет берётся из поля «значок.цвет» контракта.
 function Новый-Значок([int]$размер = 32) {
     $имяЦвета = 'акцент'
-    try { if ($script:Contract.'значок'.'цвет') { $имяЦвета = [string]$script:Contract.'значок'.'цвет' } } catch { }
-    $цвет = ИзТемы $имяЦвета @(110, 170, 255)
+    if ((Контракт-Вида).'значок'.'цвет') { $имяЦвета = [string](Контракт-Вида).'значок'.'цвет' }
+    $цвет = Цвет-Контракта $имяЦвета
     $bmp = New-Object System.Drawing.Bitmap($размер, $размер)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     try {
         $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAlias
         $g.Clear([System.Drawing.Color]::Transparent)
-        $шрифт = New-Object System.Drawing.Font('Segoe UI Symbol', ($размер * 0.62), [System.Drawing.FontStyle]::Bold)
+        $шрифт = Шрифт-Символов ($размер * 0.62) $true  # знак ⇄ есть только в символьной гарнитуре контракта
         $кисть = New-Object System.Drawing.SolidBrush $цвет
         $формат = New-Object System.Drawing.StringFormat
         $формат.Alignment = [System.Drawing.StringAlignment]::Center
@@ -262,9 +207,9 @@ function Показать-Сообщение {
         [string]$Действие = 'Понятно',
         [switch]$СпроситьДаНет
     )
-    $поле = [int](ИзОболочки 'окно_поле' 12)
+    $поле = [int](Число-Оболочки 'окно_поле')
     $ширина = 400
-    $высотаКнопки = [int](ИзОболочки 'окно_кнопка' 28)
+    $высотаКнопки = [int](Число-Оболочки 'окно_кнопка')
 
     $диалог = New-Object System.Windows.Forms.Form
     $диалог.Text = $Заголовок
@@ -281,7 +226,7 @@ function Показать-Сообщение {
 
     $шапка = New-Object System.Windows.Forms.Label
     $шапка.Text = $Заголовок
-    $шапка.Font = Шрифт (ИзОболочки 'окно_кегль_заголовка' 12) $true
+    $шапка.Font = Шрифт (Число-Оболочки 'окно_кегль_заголовка') $true
     $шапка.ForeColor = $C_TEXT
     $шапка.AutoSize = $false
     $шапка.Location = New-Object System.Drawing.Point($поле, $поле)
@@ -326,7 +271,7 @@ function Показать-Сообщение {
         $b.Location = New-Object System.Drawing.Point($x, $низ)
         $b.FlatStyle = 'Flat'
         $b.FlatAppearance.BorderSize = 0
-        $b.Font = Шрифт (ИзОболочки 'окно_кегль' 9) $описание.Главная
+        $b.Font = Шрифт (Число-Оболочки 'окно_кегль') $описание.Главная
         if ($описание.Главная) {
             $b.BackColor = $C_ACCENT
             $b.ForeColor = $C_BG
@@ -356,12 +301,12 @@ function New-AppWindow {
 
     # Плотность — из контракта «оболочка», как у меню трея: кнопки 36 и тумблер 54 точки
     # пользователь назвал огромными 23.09.2026.
-    $поле = [int](ИзОболочки 'окно_поле' 12)       # поле окна по краям
+    $поле = [int](Число-Оболочки 'окно_поле')       # поле окна по краям
     $вКарточке = $поле                               # внутреннее поле карточки
     $междуСтрок = 22    # шаг строки фактов
     $ширинаПодписи = 124
-    $высотаКнопки = [int](ИзОболочки 'окно_кнопка' 28)
-    $кегль = ИзОболочки 'окно_кегль' 9
+    $высотаКнопки = [int](Число-Оболочки 'окно_кнопка')
+    $кегль = Число-Оболочки 'окно_кегль'
 
     $окно = New-Object System.Windows.Forms.Form
     $окно.Text = 'Общая клавиатура и мышь'
@@ -373,6 +318,8 @@ function New-AppWindow {
     $окно.Font = Шрифт $кегль
     try { $окно.Icon = Значок-Приложения } catch { }
     Тёмная-Шапка $окно
+    # Стекло библиотеки — один вид всех поверхностей приложения: размытие позади окна при каждом показе.
+    $окно.Add_Shown({ param($s, $e) Стекло $s })
 
     $ширинаСодержимого = $Ширина - 2 * $поле
 
@@ -401,7 +348,7 @@ function New-AppWindow {
     $точка = Новая-Надпись $карточка $вКарточке ($вy + 1) 20 22 ([string][char]0x25CF) $C_DIM 12 $false
     $левоТекста = $вКарточке + 24
     $ширинаТекста = $ширинаСодержимого - $левоТекста - $вКарточке
-    $состояние = Новая-Надпись $карточка $левоТекста $вy $ширинаТекста 24 'Выключено' $C_TEXT (ИзОболочки 'окно_кегль_заголовка' 12) $true
+    $состояние = Новая-Надпись $карточка $левоТекста $вy $ширинаТекста 24 'Выключено' $C_TEXT (Число-Оболочки 'окно_кегль_заголовка') $true
     $вy += 26
     # Две строки подсказки — худший случай; высота карточки считается по нему,
     # а не по той строке, что написана сегодня.
@@ -429,8 +376,10 @@ function New-AppWindow {
     $y += $тумблер.Height + 10
 
     # --- строки фактов ---
+    # Строки «Переход» нет: способ перехода зависит от настроек и сказан подсказкой карточки, а в
+    # строке факта перечень способов не помещался и обрезался многоточием (снимок 23.09.2026).
     $факты = @{}
-    foreach ($подпись in @('Steam Deck', 'Этот компьютер', 'Переход', 'Версия')) {
+    foreach ($подпись in @('Steam Deck', 'Этот компьютер', 'Версия')) {
         Новая-Надпись $окно $поле $y $ширинаПодписи 20 $подпись $C_DIM $кегль $false | Out-Null
         $значение = Новая-Надпись $окно ($поле + $ширинаПодписи) $y ($ширинаСодержимого - $ширинаПодписи) 20 '—' $C_TEXT $кегль $true
         # Строка факта — ОДНА строка с многоточием, а не перенос: имя Deck'а
@@ -443,8 +392,10 @@ function New-AppWindow {
 
     $y += 6
 
-    # --- ряд вспомогательных кнопок: ширина считается от карточки ---
-    $подписи = @('Настроить Deck', 'Забыть Deck', 'Журнал')
+    # --- ряд кнопок: ширина считается от карточки ---
+    # «Перейти на Deck» — частое действие, поэтому в окне, а не в настройках; знакомство с Deck'ом
+    # и его установка — редкие, они в окне настроек (редкие действия живут в настройках).
+    $подписи = @('Перейти на Deck', 'Настройки', 'Журнал')
     $зазор = 6
     $ширинаКнопки = [int](($ширинаСодержимого - $зазор * ($подписи.Count - 1)) / $подписи.Count)
     $кнопки = @{}
@@ -514,6 +465,90 @@ function New-AppWindow {
     }
 }
 
+# ==== Окно настроек ==========================================================
+# Окно строит общая функция библиотеки `Окно-Настроек` (lib\app-shell.ps1): разделы слева, строки
+# справа, «Сохранить» и «Отмена» внизу. Здесь только описание строк; его же берёт сторож компоновки.
+# Ссылок на папки внизу нет: кнопка ведёт только внутрь приложения или в браузер.
+function Описание-Настроек {
+    param([hashtable]$Настройки, [string]$ИмяDeck = '', [scriptblock]$Забыть = { }, [scriptblock]$Установка = { })
+    $знакомый = if ($ИмяDeck) { 'Знакомый Deck — ' + $ИмяDeck } else { 'Deck ещё не знаком' }
+    return @(
+        @{ Имя = 'Переход'; Строки = @(
+            @{ Вид = 'флажок'; Подпись = 'Alt+Tab — окно «Steam Deck» в списке'; Ключ = 'alt_tab'; Значение = [bool]$Настройки.alt_tab },
+            @{ Вид = 'флажок'; Подпись = 'Край экрана'; Ключ = 'edge'; Значение = [bool]$Настройки.edge },
+            @{ Вид = 'выбор'; Подпись = 'Deck стоит'; Ключ = 'side'; Значение = [string]$Настройки.side
+               Варианты = @(@{ Имя = 'left'; Подпись = 'Слева' }, @{ Имя = 'right'; Подпись = 'Справа' }) },
+            @{ Вид = 'надпись'; Подпись = 'Кнопка «Перейти на Deck» работает всегда.'; Цвет = $C_DIM }
+        ) },
+        @{ Имя = 'Steam Deck'; Строки = @(
+            @{ Вид = 'действие'; Подпись = $знакомый; Кнопка = 'Забыть'; Действие = $Забыть },
+            @{ Вид = 'действие'; Подпись = 'Приложение на Deck''е'; Кнопка = 'Как установить'; Действие = $Установка }
+        ) }
+    )
+}
+
+# ==== Окно журнала ===========================================================
+# Журнал читается внутри приложения, а не текстовым файлом в Блокноте: кнопка приложения ведёт
+# только в его окна или в браузер. Цвет строки — по смыслу: запуск, сбой, обычная.
+function New-LogWindow {
+    $поле = [int](Число-Оболочки 'окно_поле')
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Общая клавиатура и мышь — журнал'
+    $f.StartPosition = 'CenterParent'
+    $f.BackColor = $C_BG
+    $f.ForeColor = $C_TEXT
+    $f.Font = Шрифт (Число-Оболочки 'окно_кегль')
+    $f.MinimumSize = New-Object System.Drawing.Size(480, 320)
+    $f.ClientSize = New-Object System.Drawing.Size(640, 440)
+    try { $f.Icon = Значок-Приложения } catch { }
+    Тёмная-Шапка $f
+    $f.Add_Shown({ param($s, $e) Стекло $s })
+
+    $карточка = New-Object System.Windows.Forms.Panel
+    $карточка.BackColor = $C_CARD
+    $карточка.Location = New-Object System.Drawing.Point($поле, $поле)
+    $карточка.Size = New-Object System.Drawing.Size(($f.ClientSize.Width - 2 * $поле), ($f.ClientSize.Height - 2 * $поле))
+    $карточка.Anchor = 'Top,Left,Right,Bottom'
+    $карточка.Padding = New-Object System.Windows.Forms.Padding(8)
+    $f.Controls.Add($карточка)
+
+    $текст = New-Object System.Windows.Forms.RichTextBox
+    $текст.Dock = 'Fill'
+    $текст.ReadOnly = $true
+    $текст.BorderStyle = 'None'
+    $текст.BackColor = $C_CARD
+    $текст.ForeColor = $C_DIM
+    $текст.Font = Шрифт 9
+    $текст.WordWrap = $false
+    $карточка.Controls.Add($текст)
+    Тёмный-Контрол $текст
+    # Скругление пересчитывается на каждое изменение размера: окно журнала растягивается.
+    $карточка.Add_Resize({ param($s, $e) Скруглить $s $script:R_CARD })
+    Скруглить $карточка $script:R_CARD
+    return [pscustomobject]@{ Форма = $f; Текст = $текст; Карточка = $карточка }
+}
+
+function Заполнить-Журнал($Поле, [string[]]$Строки) {
+    # Строки перерисовываются целиком, только когда их стало больше: иначе прокрутка человека
+    # сбрасывалась бы на каждом тике часов.
+    if ($Поле.Tag -eq $Строки.Count) { return }
+    $Поле.Tag = $Строки.Count
+    $Поле.Clear()
+    if (-not $Строки.Count) { $Поле.Text = 'Журнал пока пуст.'; return }
+    foreach ($s in $Строки) {
+        $цвет = $C_DIM; $жирный = $false
+        if ($s -match '=== (запуск|выход)') { $цвет = $C_ACCENT; $жирный = $true }
+        elseif ($s -match 'ОШИБКА|ДЕФЕКТ|ТРАП|сбой|не удал') { $цвет = $C_WAIT }
+        elseif ($s -match 'подключ|переход|перевёл|вернул') { $цвет = $C_TEXT }
+        $Поле.SelectionStart = $Поле.TextLength
+        $Поле.SelectionColor = $цвет
+        $Поле.SelectionFont = Шрифт 9 $жирный
+        $Поле.AppendText($s + [Environment]::NewLine)
+    }
+    $Поле.SelectionStart = $Поле.TextLength
+    $Поле.ScrollToCaret()
+}
+
 function Показать-Обновление($ui, [string]$Текст) {
     # Высота берётся из посчитанных при сборке окна чисел, а не прибавляется к текущей:
     # повторный показ той же полосы не должен вырастить окно второй раз.
@@ -527,240 +562,11 @@ function Скрыть-Обновление($ui) {
     $ui.Форма.ClientSize = New-Object System.Drawing.Size($ui.Высоты.Ширина, $ui.Высоты.Без)
 }
 
-# Шапку окна рисует не приложение, а система, и по умолчанию она светлая: тёмное
-# окно со светлым заголовком читается как чужая программа ровно так же, как
-# системный диалог. Просьба к диспетчеру окон — единственный штатный способ;
-# на сборках Windows старше 1809 её просто не слышат, и шапка остаётся светлой.
-Add-Type -Namespace Win32 -Name Dwm -MemberDefinition @"
-[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
-[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
-[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
-"@ -ErrorAction SilentlyContinue
-
-function Тёмная-Шапка($окно) {
-    $применить = {
-        try {
-            $да = 1
-            # 20 — нынешний номер свойства, 19 — тот же смысл до сборки 1903.
-            [Win32.Dwm]::DwmSetWindowAttribute($окно.Handle, 20, [ref]$да, 4) | Out-Null
-            [Win32.Dwm]::DwmSetWindowAttribute($окно.Handle, 19, [ref]$да, 4) | Out-Null
-        } catch { }
-    }.GetNewClosure()
-    # Свойство ставится по УКАЗАТЕЛЮ окна, а тот появляется только после создания:
-    # вызов до него молча ничего не делает.
-    if ($окно.IsHandleCreated) { & $применить } else { $окно.Add_HandleCreated($применить) }
-}
-
-function Поднять-Наверх($окно) {
-    # Поднять и развернуть — РАЗНЫЕ действия, и одно другого не делает.
-    #
-    # РАЗВЕРНУТЬ. Свойство WindowState формы говорит о намерении, а не о факте:
-    # свёрнутое системой окно отвечает «Normal» и остаётся свёрнутым. Замер
-    # 12.09.2026: приложение писало в журнал «видимость=True, состояние=Normal»,
-    # а окно лежало в панели задач полоской 160×28. Разворачивает только просьба
-    # к системе по указателю окна.
-    #
-    # ПОДНЯТЬ. Windows отдаёт передний план только процессу, который последним
-    # работал с вводом; приложение в трее им не является, и Activate() молча
-    # гасится. Обход штатный: окно на мгновение объявляется поверх всех и тут же
-    # перестаёт им быть — оставить его поверх всех значило бы закрыть чужую работу.
-    try {
-        if ([Win32.Dwm]::IsIconic($окно.Handle)) {
-            [Win32.Dwm]::ShowWindow($окно.Handle, 9) | Out-Null   # SW_RESTORE
-        }
-        $окно.TopMost = $true
-        $окно.Activate()
-        $окно.BringToFront()
-        $окно.TopMost = $false
-    } catch { }
-}
-
 # Имя приложения ставится прямо здесь, при подключении оболочки. Отдельный вызов
 # в приложении означал бы, что о нём надо помнить: забытый — возвращает чужой
 # значок в панель задач, и виден дефект только на скриншоте.
 Назвать-Приложение
 
 # ==== Плашка по правой кнопке на значке =======================================
-# Прежде правая кнопка поднимала СИСТЕМНОЕ меню Windows. Место Windows выбирает
-# верно, но вид у него чужой: светлое меню посреди тёмного приложения читается
-# как всплывшее окно другой программы, и состояния в нём не видно — только
-# пункты. Поэтому плашка своя:
-# плашки: кружок цвета состояния, две строки-пункта, шапка открывает окно.
-#
-# Место и раскладка берутся ОБЩЕЙ механикой: правило одно на все приложения со
-# значком в трее, и у него три потребителя.
-$ОбщаяМеханикаПлашки = Join-Path $PSScriptRoot 'lib\tray-place.ps1'
-if (Test-Path -LiteralPath $ОбщаяМеханикаПлашки) {
-    try { . $ОбщаяМеханикаПлашки } catch { Write-Log ('общая механика плашки не прочиталась: ' + $_.Exception.Message) }
-}
-if (-not (Get-Command 'Место-Плашки' -ErrorAction SilentlyContinue)) {
-    # Запас: без общего файла плашка встаёт у курсора без привязки к панели задач,
-    # а приложение работает. Отказ подняться из-за отсутствующего файла правил
-    # хуже неидеального места плашки.
-    function Место-Плашки([int]$ш, [int]$в, $курсор, $рабочая, $границы) {
-        $x = [Math]::Max($рабочая.Left + 8, [Math]::Min($курсор.X, $рабочая.Right - $ш - 8))
-        $y = [Math]::Max($рабочая.Top + 8, [Math]::Min($курсор.Y, $рабочая.Bottom - $в - 8))
-        return (New-Object System.Drawing.Point([int]$x, [int]$y))
-    }
-    function Высота-Строки-Плашки([double]$кегль) { return [int]($кегль * 2.2) + 6 }
-    function Раскладка-Плашки($строки, [int]$поле, [int]$зазорСтрок, [int]$зазорДоКнопок,
-                              [int]$высотаКнопки, [int]$подвал, [int]$пунктов = 2, [int]$зазорРядов = 6) {
-        $курсор = $поле
-        foreach ($с in $строки) {
-            $с['Высота'] = Высота-Строки-Плашки $с.Кегль
-            $с['Y'] = $курсор
-            $курсор += $с.Высота + $зазорСтрок
-        }
-        $высотаШапки = $курсор - $зазорСтрок + $поле
-        $ряды = @(); $верх = $высотаШапки + $зазорДоКнопок
-        for ($i = 0; $i -lt [Math]::Max(1, $пунктов); $i++) { $ряды += $верх; $верх += $высотаКнопки + $зазорРядов }
-        return @{ ВысотаШапки = $высотаШапки; ВерхРяда = $ряды[0]; Ряды = $ряды; Высота = $верх - $зазорРядов + $подвал }
-    }
-}
-
-function Новая-Плашка {
-    <#
-      Плашка значка: имя с кружком цвета состояния (слово — подсказкой при наведении),
-      шапка открывает окно, под ней две строки — тумблер и выход.
-
-      Раскладка СЧИТАЕТСЯ от содержимого, а не задаётся числами: строка состояния
-      бывает длиннее или короче, и число, верное для сегодняшнего набора строк,
-      обрезает завтрашний — WinForms делает это МОЛЧА.
-
-      Функция только СОБИРАЕТ плашку и возвращает её части; что делают пункты,
-      решает приложение — оно одно знает, включён ли сервер.
-    #>
-    param(
-        [Parameter(Mandatory = $true)][string]$Состояние,
-        [Parameter(Mandatory = $true)]$ЦветСостояния,
-        [string]$Пояснение = '',
-        [Parameter(Mandatory = $true)][string]$ТекстТумблера,
-        [Parameter(Mandatory = $true)]$ЦветТумблера
-    )
-
-    # Плотность меню — из контракта «оболочка», как у всех треев: состояние цветным кружком в
-    # одной строке, пункты строками вплотную, пустого места нет (канон app_canon.md).
-    $поле = [int](ИзОболочки 'меню_поле' 8)
-    $полеВерх = [int]($поле / 2)   # над шапкой и под ней — половина поля, без пустой полосы
-    $зазорСтрок = 0
-    $зазорДоКнопок = 0
-    $высотаКнопки = [int](ИзОболочки 'меню_строка' 24)
-    $подвал = 4
-
-    # Ширина — по самой длинной строке (Ширина-Меню общей библиотеки), число контракта — потолок.
-    $потолок = [int](ИзОболочки 'меню_ширина' 176)
-    $шрифтШапки = Шрифт (ИзОболочки 'меню_кегль_заголовка' 9.5) $true
-    $шрифтСтрок = Шрифт (ИзОболочки 'меню_кегль' 9)
-    $ширины = @([System.Windows.Forms.TextRenderer]::MeasureText('KVM', $шрифтШапки).Width + 14)
-    foreach ($т in @($ТекстТумблера, 'Закрыть')) {
-        $ширины += [System.Windows.Forms.TextRenderer]::MeasureText($т, $шрифтСтрок).Width
-    }
-    if (Get-Command 'Ширина-Меню' -ErrorAction SilentlyContinue) { $ш = Ширина-Меню $ширины $поле 12 $потолок }
-    else { $ш = $потолок }
-
-    # Слово состояния не пишется: его несёт цвет кружка; слово остаётся подсказкой при наведении.
-    $строки = @(
-        @{ Текст = 'KVM'; Кегль = (ИзОболочки 'меню_кегль_заголовка' 9.5)
-           Цвет = $C_TEXT; Жирная = $true }
-    )
-    if ($Пояснение) {
-        $строки += @{ Текст = $Пояснение; Кегль = (ИзОболочки 'меню_кегль_подписи' 8); Цвет = $C_DIM; Жирная = $false }
-    }
-    $раскладка = Раскладка-Плашки $строки $полеВерх $зазорСтрок $зазорДоКнопок $высотаКнопки $подвал 2 0
-
-    $f = New-Object System.Windows.Forms.Form
-    $f.FormBorderStyle = 'None'
-    $f.ShowInTaskbar = $false
-    $f.TopMost = $true
-    $f.StartPosition = 'Manual'
-    $f.Size = New-Object System.Drawing.Size($ш, $раскладка.Высота)
-    $f.BackColor = $C_CARD
-    $f.ForeColor = $C_TEXT
-    $f.Font = Шрифт (ИзОболочки 'меню_кегль' 9)
-    try { $f.Icon = Значок-Приложения } catch { }
-    Скруглить $f $script:R_BTN
-
-    $курсорМыши = [System.Windows.Forms.Cursor]::Position
-    $экран = [System.Windows.Forms.Screen]::FromPoint($курсорМыши)
-    $f.Location = Место-Плашки $ш $раскладка.Высота $курсорМыши $экран.WorkingArea $экран.Bounds
-    $f.Add_Paint({
-        param($s, $e)
-        $перо = New-Object System.Drawing.Pen($C_LINE, 1)
-        $e.Graphics.DrawRectangle($перо, 0, 0, $s.Width - 1, $s.Height - 1)
-        $перо.Dispose()
-    })
-
-    $шапка = New-Object System.Windows.Forms.Panel
-    $шапка.Location = New-Object System.Drawing.Point(0, 0)
-    $шапка.Size = New-Object System.Drawing.Size($ш, $раскладка.ВысотаШапки)
-    $шапка.BackColor = $C_CARD
-    $шапка.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $f.Controls.Add($шапка)
-
-    $подсказка = New-Object System.Windows.Forms.ToolTip
-    $надписи = @()
-    foreach ($с in $строки) {
-        $l = New-Object System.Windows.Forms.Label
-        $l.Location = New-Object System.Drawing.Point($поле, $с.Y)
-        $l.Size = New-Object System.Drawing.Size(($ш - $поле * 2), $с.Высота)
-        $l.Text = $с.Текст
-        $l.ForeColor = $с.Цвет
-        $l.BackColor = [System.Drawing.Color]::Transparent
-        $l.Font = Шрифт $с.Кегль $с.Жирная
-        # Длинная строка обрезается ТОЧКАМИ, а не молча по границе: обрыв без
-        # многоточия читается как опечатка.
-        $l.AutoEllipsis = $true
-        $l.Cursor = [System.Windows.Forms.Cursors]::Hand
-        $подсказка.SetToolTip($l, $Состояние)
-        $шапка.Controls.Add($l)
-        $надписи += $l
-    }
-    # Кружок состояния — своя надпись слева от имени, цветом состояния.
-    $кружок = New-Object System.Windows.Forms.Label
-    $кружок.Text = [string][char]0x25CF
-    $кружок.AutoSize = $false
-    $кружок.Location = New-Object System.Drawing.Point($поле, $строки[0].Y)
-    $кружок.Size = New-Object System.Drawing.Size(14, $строки[0].Высота)
-    $кружок.ForeColor = $ЦветСостояния
-    $кружок.BackColor = [System.Drawing.Color]::Transparent
-    $кружок.Font = Шрифт $строки[0].Кегль $false
-    $кружок.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $подсказка.SetToolTip($кружок, $Состояние)
-    $шапка.Controls.Add($кружок)
-    $надписи[0].Left = $поле + 14
-    $надписи[0].Width = $ш - $поле * 2 - 14
-    $надписи += $кружок
-
-    # Пункт — строка меню без рамки и заливки, подсветка при наведении: одна строка — одна кнопка.
-    function Новый-Пункт([string]$текст, [int]$y, $цвет) {
-        $b = New-Object System.Windows.Forms.Button
-        $b.Location = New-Object System.Drawing.Point(($поле - 4), $y)
-        $b.Size = New-Object System.Drawing.Size(($ш - ($поле - 4) * 2), $высотаКнопки)
-        $b.Text = $текст
-        $b.TextAlign = 'MiddleLeft'
-        $b.FlatStyle = 'Flat'
-        $b.FlatAppearance.BorderSize = 0
-        $b.FlatAppearance.MouseOverBackColor = $C_HI
-        $b.FlatAppearance.MouseDownBackColor = $C_LINE
-        $b.BackColor = $C_CARD
-        $b.ForeColor = $цвет
-        $b.Font = Шрифт (ИзОболочки 'меню_кегль' 9)
-        $b.Cursor = [System.Windows.Forms.Cursors]::Hand
-        $b.TabStop = $false
-        return $b
-    }
-
-    $тумблер = Новый-Пункт $ТекстТумблера $раскладка.Ряды[0] $ЦветТумблера
-    $f.Controls.Add($тумблер)
-    $выход = Новый-Пункт 'Закрыть' $раскладка.Ряды[1] $C_TEXT
-    $f.Controls.Add($выход)
-
-    return @{
-        Форма    = $f
-        Шапка    = $шапка
-        Надписи  = $надписи
-        Тумблер  = $тумблер
-        Выход    = $выход
-        Раскладка = $раскладка
-    }
-}
+# Меню значка собирает общая функция библиотеки `Меню-Трея` (`lib\tray-place.ps1`): строки, шрифт,
+# отступы, фон, рамка и скругление у всех треев одни. Своей сборки меню у приложения нет.

@@ -39,6 +39,41 @@ def test_stranger_pc_is_ignored_after_pairing():
         s.close()
 
 
+def test_own_pc_with_lost_memory_is_recognised_by_its_address():
+    # Компьютер потерял память о паре и пришёл с новым номером с того же адреса: Deck не молчит,
+    # а узнаёт его и отвечает — иначе компьютер навсегда оставался «ещё не знакомы».
+    s = soldier()
+    try:
+        s.accept(beacon("pc-old"), ("192.168.0.11", 50000))
+        assert s.accept(beacon("pc-new"), ("192.168.0.11", 50001)) is True
+        assert s.peer == "pc-new"
+        again = soldier()
+        assert again.peer == "pc-new", "новый номер пережил перезапуск"
+        again.close()
+    finally:
+        s.close()
+
+
+def test_new_number_from_another_address_stays_a_stranger():
+    s = soldier()
+    try:
+        s.accept(beacon("pc-old"), ("192.168.0.11", 50000))
+        assert s.accept(beacon("pc-new"), ("192.168.0.77", 50001)) is False
+        assert s.peer == "pc-old"
+    finally:
+        s.close()
+
+
+def test_pc_that_names_this_deck_is_own_even_with_new_number():
+    s = soldier()
+    try:
+        s.accept(beacon("pc-old"), ("192.168.0.11", 50000))
+        assert s.accept(beacon("pc-new", knows=s.id), ("10.0.0.9", 50001)) is True
+        assert s.peer == "pc-new"
+    finally:
+        s.close()
+
+
 def test_pc_busy_with_other_deck_is_not_taken():
     s = soldier()
     try:
@@ -114,4 +149,58 @@ def test_pc_languages_are_taken_from_beacon():
         s.accept(beacon("pc-1"), ("192.168.0.14", 50000))
         assert s.languages == "en-US,ru-RU", "маячок прежнего ПК без языков не стирает известные"
     finally:
+        s.close()
+
+
+def test_reply_carries_own_version_so_pc_sees_outdated_deck():
+    s = soldier()
+    pc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    pc.bind(("127.0.0.1", 0))
+    pc.settimeout(2)
+    try:
+        s.version = "1.2.0"
+        s.accept(beacon("pc-1"), pc.getsockname())
+        reply = pc.recv(1024).decode().split()
+        assert reply[1] == "DECK" and reply[4] == "1.2.0"
+    finally:
+        pc.close()
+        s.close()
+
+
+def test_pc_flags_are_read_and_old_pc_keeps_everything_on():
+    s = soldier()
+    try:
+        s.accept(beacon("pc-1"), ("192.168.0.14", 50000))
+        assert s.flags == {"alttab": True}, "прежний компьютер флагов не шлёт"
+        s.accept(beacon("pc-1") + b" en-US,ru-RU alttab=0", ("192.168.0.14", 50000))
+        assert s.flags == {"alttab": False}
+    finally:
+        s.close()
+
+
+def test_update_request_only_from_own_pc():
+    s = soldier()
+    try:
+        update = lambda pc: ("%s UPDATE %s" % (config_policy.PROTOCOL, pc)).encode()
+        assert s.accept(update("pc-1"), ("192.168.0.14", 50000)) is False, "до знакомства просьба не принимается"
+        s.accept(beacon("pc-1"), ("192.168.0.14", 50000))
+        assert s.accept(update("pc-2"), ("192.168.0.99", 50000)) is False and not s.update_requested
+        assert s.accept(update("pc-1"), ("192.168.0.14", 50000)) is True and s.update_requested
+    finally:
+        s.close()
+
+
+def test_return_request_goes_to_the_port_the_beacon_came_from():
+    s = soldier()
+    pc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    pc.bind(("127.0.0.1", 0))
+    pc.settimeout(2)
+    try:
+        assert s.send_to_pc() is False, "маячка ещё не было — просить некого"
+        s.accept(beacon("pc-1"), pc.getsockname())
+        pc.recv(1024)                                   # ответ на маячок
+        assert s.send_to_pc() is True
+        assert pc.recv(1024).decode().split()[1:] == ["TOPC", s.id]
+    finally:
+        pc.close()
         s.close()

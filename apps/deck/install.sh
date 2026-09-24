@@ -239,6 +239,20 @@ if [ -d "$HOME/Desktop" ]; then
 	chmod +x "$HOME/Desktop/SteamDeck-KVM.desktop"
 fi
 update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+# Окно «Компьютер» для Alt+Tab поднимает автозапуск рабочего стола; в игровом режиме оно не нужно.
+AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+mkdir -p "$AUTOSTART_DIR"
+cat > "$AUTOSTART_DIR/steamdeck-kvm-pc-window.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=SteamDeck-KVM — Alt+Tab
+Name[ru]=Общая клавиатура и мышь — окно «Компьютер»
+Exec=$APP_HOME/app/apps/deck/steamdeck-kvm-app.sh --pc-window
+Icon=$ICON
+Terminal=false
+NoDisplay=true
+OnlyShowIn=KDE;
+EOF
 say "Ярлык «Общая клавиатура и мышь» — в меню приложений и на рабочем столе."
 say "Чтобы видеть окно и в игровом режиме: правой кнопкой по ярлыку в меню → «Добавить в Steam»."
 
@@ -255,4 +269,11 @@ fi
 say ""
 say "Готово. Теперь на компьютере откройте «Общая клавиатура и мышь» и нажмите «Включить»."
 say "Deck найдёт компьютер сам — и в игровом режиме, и после перезагрузки."
-nohup "$APP_HOME/app/apps/deck/steamdeck-kvm-app.sh" >/dev/null 2>&1 &
+# Обновление, запущенное службой (кнопка в окне Deck'а, просьба компьютера), окон не открывает:
+# в игровом режиме окно встало бы поверх игры, а открытое окно состояния переподключится само.
+if [ -z "${STEAMDECK_KVM_NO_PAUSE:-}" ]; then
+	nohup "$APP_HOME/app/apps/deck/steamdeck-kvm-app.sh" >/dev/null 2>&1 &
+	case "${XDG_CURRENT_DESKTOP:-}" in
+		*KDE*) nohup "$APP_HOME/app/apps/deck/steamdeck-kvm-app.sh" --pc-window >/dev/null 2>&1 & ;;
+	esac
+fi

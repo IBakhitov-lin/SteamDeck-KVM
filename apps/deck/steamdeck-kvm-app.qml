@@ -18,6 +18,8 @@ Window {
     visible: true
     title: "Общая клавиатура и мышь"
     color: theme("фон", "#151517")
+    // Окно открывается поверх остальных, а не позади: запуск по ярлыку — просьба человека увидеть его.
+    Component.onCompleted: { raise(); requestActivate() }
 
     readonly property int pad: 20
     property var status: ({})
@@ -50,7 +52,7 @@ Window {
         "waiting_pc": "Откройте приложение на компьютере. Deck найдёт его сам, адрес вводить не нужно.",
         "pc_off": "Компьютер в сети, но общая клавиатура на нём выключена.",
         "connecting": "Компьютер нашёлся, поднимаем связь.",
-        "connected": "Доведите курсор на компьютере до края экрана или нажмите Ctrl+Alt+→. Обратно — Ctrl+Alt+←.",
+        "connected": "Сюда — Alt+Tab на компьютере или край его экрана. Обратно — Alt+Tab: в игре сразу, на рабочем столе — окно «Компьютер» в списке; или кнопка ниже.",
         "display_off": "Так курсор не уйдёт в погасший экран. Экран загорится — связь вернётся сама.",
         "no_uinput": "Запустите установщик ещё раз — он выдаст доступ."
     })
@@ -171,11 +173,19 @@ Window {
                 }
             }
 
+            // --- возврат на компьютер: частое действие, поэтому первым после состояния ---
+            AppButton {
+                width: parent.width
+                visible: root.alive && root.status.state === "connected"
+                accent: true
+                text: "На компьютер"
+                onClicked: root.act("to_pc")
+            }
+
             // --- обновление: строка появляется, только когда обновление есть ---
             AppButton {
                 width: parent.width
                 visible: root.alive && !!root.status.update_available
-                accent: true
                 enabled: !root.status.updating
                 text: root.status.updating ? "Обновляется…" : "Обновить до " + root.status.update_available
                 onClicked: root.act("update")

@@ -27,7 +27,8 @@ Move the mouse off the edge of your monitor — the cursor lands on the Steam De
 
 ## Use
 
-- **Switch** — push the cursor past the screen edge, or `Alt+Tab` to the **Steam Deck** window on the PC; back to the PC — `Alt+Tab` on the Deck. `Ctrl+Alt+→` / `Ctrl+Alt+←` still work.
+- **Switch with Alt+Tab** — on the PC the Deck is a **Steam Deck** window in the `Alt+Tab` list: pick it and the keyboard and mouse move to the Deck. Back: `Alt+Tab` on the Deck — inside a game it returns at once, on the Deck's desktop pick the **Computer** window in the list.
+- **Or the screen edge, or a button** — push the cursor past the screen edge, or press **Go to Deck** in the PC app and **To computer** in the Deck app. In **Settings** you can turn the screen edge off, so only `Alt+Tab` and the buttons switch, and choose which side the Deck is on.
 - **Games** — when a game hides the cursor (third-person camera, shooters), the mouse turns the camera without hitting a screen edge and never slips back to the PC. Open the Steam menu (`Shift+Tab`, Steam button) and the cursor is free again; `Alt+Tab` leaves the game at any time.
 - **After a reboot** — turn on the Deck, press **Enable** on the PC. The machines remember each other by device ID, not IP address.
 - **Deck screen off or Deck asleep** — the cursor stays on the PC.
@@ -35,7 +36,7 @@ Move the mouse off the edge of your monitor — the cursor lands on the Steam De
 
 ## Update
 
-An **Update** button appears in both apps when a new release is out; it runs the installer of that release. Pairing and settings are kept.
+When a new release is out, the PC app shows a notification with an **Update** button, and the same button appears in its window. One press updates the PC and, if the Deck is connected and behind, the Deck too — on its desktop, in Game Mode and in the middle of a game. Updated the PC while the Deck was off? When the Deck connects, the button comes back as **Update Deck**. A Deck older than this release updates once from its own window. Pairing and settings are kept.
 
 ## Uninstall
 

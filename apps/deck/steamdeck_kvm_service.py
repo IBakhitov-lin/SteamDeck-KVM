@@ -39,6 +39,16 @@ from core.soldiers.release_update_soldier import ReleaseUpdateSoldier  # noqa: E
 UNIT = "steamdeck-kvm.service"
 
 
+def should_update(asked: bool, updating: bool) -> bool:
+    """Обновляться ли сейчас: только по просьбе компьютера (его кнопка «Обновить») и не поверх идущего.
+
+    Сама служба ничего не ставит: обновление — по нажатию человека. Просьба
+    исполняется в любом режиме — на рабочем столе, в игровом режиме и посреди игры: служба живёт
+    вне режима, а перезапуск её игры не трогает.
+    """
+    return asked and not updating
+
+
 def read_settings(path: Path | None = None) -> dict:
     """Настройки вручную не нужны; файл законен только для особых сетей.
 
@@ -152,18 +162,29 @@ def serve() -> int:
         discovery = None
         log("поиск по сети недоступен (%s) — работаем по адресу из настроек" % error)
 
+    if discovery:
+        discovery.version = config_policy.app_version()
     commander = DeckClientCommander(hosts, int(settings.get("port", config_policy.KVM_PORT)), name, log,
                                     pointer=pointer, discovery=discovery)
     updater = ReleaseUpdateSoldier(config_policy.app_version(), log=commander.log)
-    pending = {"release": None}
+    pending = {"release": None, "checked": 0.0}
 
     def check_updates_forever():
+        """Проверка раз в шесть часов — ради кнопки в окне Deck'а; обновление — только по просьбе компьютера."""
         time.sleep(60)  # сразу после входа сеть на Deck'е часто ещё не поднята
         while True:
-            release = updater.check()
-            pending["release"] = release
-            commander.set_status(update_available=release["version"] if release else None)
-            time.sleep(config_policy.UPDATE_CHECK_SECONDS)
+            now = time.monotonic()
+            if now - pending["checked"] >= config_policy.UPDATE_CHECK_SECONDS:
+                pending["checked"] = now
+                release = updater.check()
+                pending["release"] = release
+                commander.set_status(update_available=release["version"] if release else None)
+            asked = bool(discovery and discovery.update_requested)
+            if should_update(asked, commander.status.updating):
+                discovery.update_requested = False
+                commander.log("обновление по просьбе компьютера")
+                apply_update()
+            time.sleep(2)
 
     def apply_update():
         if not (pending["release"] or updater.check()):

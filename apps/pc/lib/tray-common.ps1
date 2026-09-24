@@ -1,29 +1,9 @@
-﻿# КОПИЯ общего модуля, собранная build_release_script.py из общего исходника.
-# Правится исходник, а не копия: копия перезаписывается при каждой сборке выпуска.
-# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Общий каркас приложения со значком в трее: единственный
-# экземпляр через мьютекс, значок NotifyIcon, цвет из контракта palette.json.
-#
-# ПРОИСХОЖДЕНИЕ — вынесено 08.09.2026 из SteamDeck-KVM.ps1, который списал устройство у
-# соседний проект (private_tools/scripts/соседний проект_tray.ps1). SteamDeck-KVM — уже ВТОРОЙ потребитель
-# одного и того же каркаса (workflow.md, «Общая механика выносится при ВТОРОМ потребителе»),
-# и вынесение сделано сюда, а не правкой живого соседний проект_tray.ps1 — тот остаётся нетронутым:
-# перевод соседний проект на этот модуль отдельным долгом лежит в backlog.md ГСИ.
-#
-# Подключается точкой (dot-source) из тела приложения:
-#   . 'tray-common.ps1'
-#
-# Что даёт:
-#   Get-SingleInstanceLock  — мьютекс на всё приложение
-#   Get-PaletteColor        — hex-цвет из контракта, с запасным значением
-#   New-GlyphIcon           — Icon, нарисованный одним символом Unicode
+﻿# Файл общей библиотеки, положенный сборщиком выпуска. Правится исходник, а не он.
 
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
 function Get-SingleInstanceLock {
-    <#
-    .SYNOPSIS
-    Захватывает именованный мьютекс. .IsOwner = $true, если экземпляр единственный.
-    #>
+    
     param(
         [Parameter(Mandatory)][string]$Name
     )
@@ -34,11 +14,7 @@ function Get-SingleInstanceLock {
 
 $script:PaletteCache = $null
 function Get-PaletteColor {
-    <#
-    .SYNOPSIS
-    Цвет из палитры (по умолчанию palette.json, тема 'тёмная').
-    Отсутствие файла или поля не считается ошибкой — отдаётся запасной цвет.
-    #>
+    
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][int[]]$Fallback,
@@ -66,11 +42,7 @@ function Get-PaletteColor {
 }
 
 function New-GlyphIcon {
-    <#
-    .SYNOPSIS
-    Рисует значок 32x32 одним символом Unicode нужного цвета — контракт палитры
-    требует «один рисунок, меняется только цвет», это и даёт наименьшую реализацию.
-    #>
+    
     param(
         [Parameter(Mandatory)][char]$Glyph,
         [Parameter(Mandatory)][System.Drawing.Color]$Color,

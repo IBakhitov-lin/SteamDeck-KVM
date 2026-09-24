@@ -37,6 +37,7 @@ $ServerConf = Join-Path $ConfDir 'deskflow-server.conf'
 $ScreensConf = Join-Path $ConfDir 'screens.conf'
 $PairFile   = Join-Path $ConfDir 'pair.json'
 $LogFile    = Join-Path $ConfDir 'tray.log'
+$SettingsFile = Join-Path $ConfDir 'settings.json'
 
 $KvmPort    = 24800   # порт протокола Barrier/Synergy (сервер Deskflow)
 $BeaconPort = 24801   # порт рассылки знакомства — его слушает deck-kvm.py
@@ -55,7 +56,7 @@ trap { Write-Log ('ТРАП: ' + $_.Exception.Message + ' | ' + $_.InvocationInf
 . (Join-Path $Root 'lib\tray-common.ps1')
 
 # Второй запуск не поднимает второе окно, а показывает первое. Опрос идёт раз в
-# секунду — канон требует не реже чем раз в полсекунды по ощущению человека,
+# секунду — правило окна — не реже чем раз в полсекунды по ощущению человека,
 # и секунда здесь граница: ответ медленнее человек принимает за отказ.
 $ShowSignal = New-Object System.Threading.EventWaitHandle($false,
     [System.Threading.EventResetMode]::AutoReset, 'Local\SteamDeckKvmShow')
@@ -68,6 +69,13 @@ if (-not $instance.IsOwner -and $AfterUpdate) {
 }
 if (-not $instance.IsOwner) {
     Write-Log 'второй запуск: показываю уже открытое окно'
+    # Право вывести окно вперёд есть у процесса, запущенного щелчком человека, а у давно работающего
+    # первого экземпляра его нет: без передачи права окно поднималось позади остальных и только мигало
+    # на панели задач. ASFW_ANY (-1) передаёт право; первый экземпляр пользуется им до ввода человека.
+    try {
+        Add-Type -Namespace Win32 -Name Foreground -MemberDefinition '[DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int processId);'
+        [Win32.Foreground]::AllowSetForegroundWindow(-1) | Out-Null
+    } catch { Write-Log ('право вывести окно вперёд не передано: ' + $_.Exception.Message) }
     $ShowSignal.Set() | Out-Null
     exit 0
 }
@@ -125,6 +133,36 @@ function Forget-Deck {
     Write-Log 'пара забыта: следующий откликнувшийся Deck станет новым'
 }
 
+# ==== Настройки приложения ===================================================
+# Три выбора человека, окно «Настройки»: переход по Alt+Tab, переход краем экрана и сторона Deck'а.
+# Всё прочее выводимо и не настраивается. Обновление — только по нажатию человека.
+$script:Settings = @{ alt_tab = $true; edge = $true; side = 'right' }
+
+function Load-Settings {
+    try {
+        if (Test-Path -LiteralPath $SettingsFile) {
+            $с = Get-Content -LiteralPath $SettingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($к in @('alt_tab', 'edge')) { if ($null -ne $с.$к) { $script:Settings[$к] = [bool]$с.$к } }
+            if ([string]$с.side -in @('left', 'right')) { $script:Settings.side = [string]$с.side }
+            return
+        }
+        # Первый запуск с настройками: сторону Deck'а человек мог поменять руками в прежней
+        # раскладке — она переносится, а не сбрасывается.
+        if (Test-Path -LiteralPath $ScreensConf) {
+            $имяПК = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'pc' }
+            $прежняя = [System.IO.File]::ReadAllText($ScreensConf)
+            if ($прежняя -match ('(?ms)^\s*' + [regex]::Escape($имяПК) + ':\s*\r?\n\s*left\s*=\s*steamdeck')) { $script:Settings.side = 'left' }
+        }
+    } catch { Write-Log ('настройки не прочитались, взяты по умолчанию: ' + $_.Exception.Message) }
+}
+
+function Save-Settings {
+    try {
+        [System.IO.File]::WriteAllText($SettingsFile, ($script:Settings | ConvertTo-Json),
+            (New-Object System.Text.UTF8Encoding($false)))
+    } catch { Write-Log ('настройки не записались: ' + $_.Exception.Message) }
+}
+
 # ==== Настройка сервера: создаётся сама, а не требуется от человека ==========
 # Файла настройки может не быть по трём причинам: первый запуск, чистка папки
 # AppData, перенос на другую машину. Во всех трёх человеку сообщать не о чем —
@@ -161,7 +199,52 @@ function Снять-Метку([string]$Путь) {
     }
 }
 
-$МеткаРаскладки = '# steamdeck-kvm-layout v2'
+$МеткаРаскладки = '# steamdeck-kvm-layout v4'
+
+# Служебные клавиши приложения. Сочетание для человека одно — Alt+Tab; его Windows горячей клавишей
+# не отдаёт, поэтому переход делает само приложение: нажимает программой служебное сочетание, которое
+# ловит сервер. F23 и F24 на клавиатурах нет — человек их не нажмёт и ничего своего ими не занимает.
+# Живой замер 23.09.2026 (Deskflow 1.26): программное нажатие переводит на Deck за 0,03 с и
+# возвращает с Deck'а, и без края экрана — переход не зависит от того, включён ли край.
+$КлавишаНаDeck = 0x86     # F23
+$КлавишаНаПК   = 0x87     # F24
+
+function Текст-Раскладки([string]$ИмяПК, [string]$Метка, [bool]$Край, [string]$Сторона) {
+    # Чистая функция: текст раскладки из настроек — её зовёт Ensure-Config и проверяет тест.
+    $сторона = $Сторона
+    $обратно = if ($сторона -eq 'right') { 'left' } else { 'right' }
+    # Край экрана — это раздел links: без него сервер переводит только служебными клавишами.
+    $связи = if ($Край) { @"
+
+section: links
+	${ИмяПК}:
+		$сторона = steamdeck
+	steamdeck:
+		$обратно = $ИмяПК
+end
+"@ } else { '' }
+    $раскладка = @"
+$Метка
+# Раскладка экранов собирается приложением «Общая клавиатура и мышь» из его настроек
+# (окно «Настройки»: край экрана и сторона Deck'а). Правка руками перезаписывается.
+
+section: screens
+	${ИмяПК}:
+	steamdeck:
+end
+$связи
+section: options
+	# Переход мгновенный: задержка у края делала переход на Deck заметно медленным.
+	switchDelay = 0
+	switchDoubleTap = 0
+	# Служебные клавиши приложения, не для человека: их нажимает само приложение по Alt+Tab и
+	# кнопкам «Перейти». Клавиш F23 и F24 на клавиатурах нет.
+	keystroke(Control+Alt+Shift+F23) = switchToScreen(steamdeck)
+	keystroke(Control+Alt+Shift+F24) = switchToScreen($ИмяПК)
+end
+"@
+    return $раскладка
+}
 
 function Ensure-Config {
     # Возвращает, изменилась ли раскладка: сервер читает её только при старте.
@@ -172,47 +255,18 @@ function Ensure-Config {
     Снять-Метку $ScreensConf
 
     $изменено = $false
+    $метка = '{0} edge={1} side={2}' -f $МеткаРаскладки, [int][bool]$script:Settings.edge, $script:Settings.side
     $прежняя = if (Test-Path $ScreensConf) { [System.IO.File]::ReadAllText($ScreensConf) } else { '' }
     # Своя ли раскладка — по метке либо по шапке прежней версии приложения. Чужую, написанную
     # руками без метки, приложение не трогает никогда.
     $своя = ($прежняя -eq '') -or $прежняя.StartsWith('# steamdeck-kvm-layout') -or
             $прежняя.Contains('Раскладка экранов для общей клавиатуры и мыши')
-    if ($своя -and -not $прежняя.StartsWith($МеткаРаскладки)) {
-        # Сторона Deck'а — единственное, что человек менял руками; она переносится в новую раскладку.
-        $сторона = 'right'
-        if ($прежняя -match ('(?ms)^\s*' + [regex]::Escape($имяПК) + ':\s*\r?\n\s*left\s*=\s*steamdeck')) { $сторона = 'left' }
-        $обратно = if ($сторона -eq 'right') { 'left' } else { 'right' }
-        $раскладка = @"
-$МеткаРаскладки
-# Раскладка экранов собирается приложением «Общая клавиатура и мышь».
-# Сторону Deck'а можно поменять: поменяйте местами left и right в разделе links —
-# приложение сохранит её при следующей пересборке. Остальное перезаписывается.
-
-section: screens
-	${имяПК}:
-	steamdeck:
-end
-
-section: links
-	${имяПК}:
-		$сторона = steamdeck
-	steamdeck:
-		$обратно = $имяПК
-end
-
-section: options
-	# Переход мгновенный: задержка у края делала переход на Deck заметно медленным.
-	switchDelay = 0
-	switchDoubleTap = 0
-	# Горячие клавиши на СТРЕЛКАХ, а не на буквах: сервер хранит символ клавиши, и при русской
-	# раскладке «d» становится «в» — прежняя Win+Shift+D просто не срабатывала.
-	keystroke(Control+Alt+Right) = switchInDirection(right)
-	keystroke(Control+Alt+Left) = switchInDirection(left)
-end
-"@
+    $перваяСтрока = ($прежняя -split "`r?`n")[0]
+    if ($своя -and $перваяСтрока -ne $метка) {
+        $раскладка = Текст-Раскладки $имяПК $метка ([bool]$script:Settings.edge) $script:Settings.side
         Записать-БезМетки $ScreensConf $раскладка
         $изменено = $true
-        Write-Log "раскладка экранов пересобрана ($МеткаРаскладки, Deck — $сторона)"
+        Write-Log "раскладка экранов пересобрана ($метка)"
     }
 
     if (-not (Test-Path $ServerConf)) {
@@ -354,7 +408,10 @@ function Send-Beacon([bool]$IsRunning) {
     $знакомый = if ($script:Pair.deck_id) { $script:Pair.deck_id } else { '-' }
     # Последним полем — языки клавиатуры этого компьютера: клавиши уходят на Deck физическими,
     # и Deck заводит у себя те же раскладки с переключением Alt+Shift.
-    $текст = '{0} SERVER {1} {2} {3} {4} {5} {6}' -f $Protocol, $script:Pair.pc_id, $env:COMPUTERNAME, $KvmPort, $состояние, $знакомый, $script:Languages
+    # Восьмым полем — выбор человека, который исполняет Deck: возвращает ли Alt+Tab на компьютер.
+    # Прежний Deck поле не читает и работает как раньше.
+    $флаги = 'alttab={0}' -f [int][bool]$script:Settings.alt_tab
+    $текст = '{0} SERVER {1} {2} {3} {4} {5} {6} {7}' -f $Protocol, $script:Pair.pc_id, $env:COMPUTERNAME, $KvmPort, $состояние, $знакомый, $script:Languages, $флаги
     $байты = [System.Text.Encoding]::UTF8.GetBytes($текст)
     foreach ($цель in $script:BroadcastTargets) {
         try { $script:Udp.Send($байты, $байты.Length, $цель, $BeaconPort) | Out-Null } catch { }
@@ -368,6 +425,12 @@ function Receive-DeckReplies {
             $отправитель = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
             $данные = $script:Udp.Receive([ref]$отправитель)
             $части = ([System.Text.Encoding]::UTF8.GetString($данные)).Trim() -split '\s+'
+            # Просьба Deck'а вернуть управление: Alt+Tab в игре, окно «Компьютер» на его рабочем
+            # столе, кнопка в его окне. Принимается только от своего Deck'а и с его адреса.
+            if ($части.Count -ge 3 -and $части[0] -eq $Protocol -and $части[1] -eq 'TOPC') {
+                if ($script:Pair.deck_id -and $части[2] -eq $script:Pair.deck_id) { Вернуть-На-ПК 'просьба Deck''а' }
+                continue
+            }
             if ($части.Count -lt 4 -or $части[0] -ne $Protocol -or $части[1] -ne 'DECK') { continue }
             $номер = $части[2]
             $имя = $части[3]
@@ -390,6 +453,8 @@ function Receive-DeckReplies {
                 Write-Log ('свой Deck сменил адрес: ' + $адрес)
             }
             $script:DeckSeen = Get-Date
+            # Пятое поле — версия Deck'а (с 1.2.1): по ней видно, отстаёт ли он от выпуска.
+            if ($части.Count -ge 5) { $v = Разобрать-Версию $части[4]; if ($v) { $script:DeckVersion = $v } }
         } catch { break }
     }
 }
@@ -411,6 +476,72 @@ function Test-DeckConnected {
     return $false
 }
 
+# ==== Переход: служебные клавиши сервера =====================================
+Add-Type -Namespace Win32 -Name DeckJump -MemberDefinition @'
+[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, IntPtr extra);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+'@
+
+function Нажать-Служебную([byte]$Клавиша) {
+    # Ctrl+Alt+Shift+клавиша: одна Alt без соседей открыла бы меню окна, здесь её держат ещё две.
+    $мод = @(0x11, 0x12, 0x10)
+    foreach ($к in $мод) { [Win32.DeckJump]::keybd_event([byte]$к, 0, 0, [IntPtr]::Zero) }
+    [Win32.DeckJump]::keybd_event($Клавиша, 0, 0, [IntPtr]::Zero)
+    [Win32.DeckJump]::keybd_event($Клавиша, 0, 2, [IntPtr]::Zero)
+    [array]::Reverse($мод)
+    foreach ($к in $мод) { [Win32.DeckJump]::keybd_event([byte]$к, 0, 2, [IntPtr]::Zero) }
+}
+
+function Перейти-На-Deck([string]$Откуда = 'кнопка') {
+    if (-not (Test-ServerRunning) -or -not (Test-DeckConnected)) { Write-Log ("переход на Deck ({0}): Deck не подключён" -f $Откуда); return }
+    Нажать-Служебную $КлавишаНаDeck
+    Write-Log ("переход на Deck: {0}" -f $Откуда)
+}
+
+function Вернуть-На-ПК([string]$Откуда) {
+    if (-not (Test-ServerRunning)) { return }
+    Нажать-Служебную $КлавишаНаПК
+    Write-Log ("управление возвращено на компьютер: {0}" -f $Откуда)
+}
+
+# Deck — отдельное окно «Steam Deck» в списке Alt+Tab и на панели задач. Горячая клавиша сервера на
+# Alt+Tab отняла бы у Windows переключение окон целиком, а RegisterHotKey её и не отдаёт. Выбрали
+# окно — фокус возвращается окну, где человек работал, а приложение нажимает служебную клавишу.
+# Окно есть в списке, только пока Deck подключён и переход по Alt+Tab включён в настройках.
+$script:ПрежнееОкно = [IntPtr]::Zero
+$deckForm = New-Object System.Windows.Forms.Form
+$deckForm.Text = 'Steam Deck'
+$deckForm.ShowInTaskbar = $true
+$deckForm.FormBorderStyle = 'None'
+$deckForm.Opacity = 0
+$deckForm.StartPosition = 'Manual'
+$deckForm.Location = New-Object System.Drawing.Point(-32000, -32000)
+$deckForm.Size = New-Object System.Drawing.Size(1, 1)
+$deckForm.Icon = Значок-Трея
+$deckForm.Add_Activated({
+    [Win32.DeckJump]::ShowWindow($deckForm.Handle, 7) | Out-Null     # SW_SHOWMINNOACTIVE — снова свёрнуто
+    if ($script:ПрежнееОкно -ne [IntPtr]::Zero) { [Win32.DeckJump]::SetForegroundWindow($script:ПрежнееОкно) | Out-Null }
+    Перейти-На-Deck 'Alt+Tab на окно «Steam Deck»'
+})
+$script:DeckWindowShown = $false
+
+function Обновить-Окно-Deck([bool]$Нужно) {
+    if ($Нужно -eq $script:DeckWindowShown) { return }
+    $script:DeckWindowShown = $Нужно
+    if ($Нужно) { [Win32.DeckJump]::ShowWindow($deckForm.Handle, 7) | Out-Null }   # свёрнуто, без фокуса
+    else { [Win32.DeckJump]::ShowWindow($deckForm.Handle, 0) | Out-Null }          # SW_HIDE
+}
+
+# Окно, где человек работал до Alt+Tab, запоминается часто: после перехода фокус стоит там же.
+$focusTimer = New-Object System.Windows.Forms.Timer
+$focusTimer.Interval = 250
+$focusTimer.Add_Tick({
+    $окно = [Win32.DeckJump]::GetForegroundWindow()
+    if ($окно -ne [IntPtr]::Zero -and $окно -ne $deckForm.Handle) { $script:ПрежнееОкно = $окно }
+})
+
 # ==== Уснувший Deck ==========================================================
 # Своего сторожа здесь нет намеренно. Прежний перезапускал сервер, когда Deck молчал на маячок
 # восемь секунд при живом соединении, — выигрыш в одну секунду против защиты самого Deskflow
@@ -428,6 +559,29 @@ $script:UpdateTask = $null
 $script:UpdateInfo = $null
 $script:UpdateStage = $null
 $script:NextUpdateCheck = (Get-Date).AddSeconds(15)
+# Deck обновляется по просьбе компьютера: служба Deck'а ставит последний выпуск с github.com сама —
+# на рабочем столе, в игровом режиме и посреди игры: служба живёт вне режима. Просьба — строка на
+# его порт знакомства; Deck принимает её только от своего компьютера. Версию Deck сообщает в ответе
+# на маячок. Сами ничего не ставим: обновление — по нажатию человека.
+$script:Latest = $null
+$script:DeckVersion = $null
+$script:DeckAsked = [datetime]::MinValue
+$script:Оповещено = @{}      # о каком обновлении уже было уведомление: одно на версию и устройство
+
+function Deck-Отстаёт {
+    return [bool]($script:Latest -and $script:DeckVersion -and $script:DeckVersion -lt $script:Latest -and
+                  ((Get-Date) - $script:DeckSeen).TotalSeconds -lt 15)
+}
+
+function Попросить-Deck-Обновиться {
+    if (-not $script:Udp -or -not $script:Pair.deck_address) { return }
+    try {
+        $байты = [System.Text.Encoding]::UTF8.GetBytes(('{0} UPDATE {1}' -f $Protocol, $script:Pair.pc_id))
+        $script:Udp.Send($байты, $байты.Length, $script:Pair.deck_address, $BeaconPort) | Out-Null
+        $script:DeckAsked = Get-Date
+        Write-Log ('Deck''у отправлена просьба обновиться с {0} до {1}' -f $script:DeckVersion, $script:Latest)
+    } catch { Write-Log ('просьба Deck''у обновиться не ушла: ' + $_.Exception.Message) }
+}
 
 function Новый-Загрузчик {
     $клиент = New-Object System.Net.WebClient
@@ -436,13 +590,59 @@ function Новый-Загрузчик {
 }
 
 function Начать-Проверку-Обновления {
-    if ($IsDevCheckout -or $script:UpdateTask) { return }
+    # Рабочая копия тоже проверяет выпуски: сама она обновляется через git, но без номера последнего
+    # выпуска не узнала бы, что Deck отстаёт, и кнопки «Обновить Deck» не показала бы никогда.
+    if ($script:UpdateTask) { return }
     try {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
         $script:UpdateStage = 'проверка'
         $script:UpdateTask = (Новый-Загрузчик).DownloadStringTaskAsync($ReleasesUrl)
     } catch {
         Write-Log ('проверка обновлений не началась: ' + $_.Exception.Message)
+    }
+}
+
+function Сообщить-Об-Обновлении {
+    # Одно уведомление на версию и устройство — общим уведомлением библиотеки (`lib\tray-place.ps1`): по
+    # кнопке «Обновить» ставится сразу. Компьютер обновлён, а Deck подключился позже и отстаёт —
+    # отдельное уведомление про Deck: кнопке компьютера обновлять больше нечего, а Deck ждёт.
+    $что = $null
+    if ($script:UpdateInfo) {
+        $ключ = 'pc:' + $script:UpdateInfo.Версия
+        if (-not $script:Оповещено[$ключ]) {
+            $иDeck = if (Deck-Отстаёт) { ' Steam Deck обновится следом.' } else { '' }
+            $что = @{ Ключ = $ключ; Заголовок = ('Общая клавиатура и мышь {0}' -f $script:UpdateInfo.Версия)
+                      Текст = ('Вышло обновление, установка займёт около минуты.' + $иDeck); Действие = { Начать-Обновление } }
+        }
+    } elseif (Deck-Отстаёт) {
+        $ключ = 'deck:' + $script:Latest
+        if (-not $script:Оповещено[$ключ]) {
+            $что = @{ Ключ = $ключ; Заголовок = ('Steam Deck: доступна версия {0}' -f $script:Latest)
+                      Текст = ('Сейчас на Deck''е {0}. Обновление идёт в любом режиме, даже в игре.' -f $script:DeckVersion)
+                      Действие = { Попросить-Deck-Обновиться; Кнопка-Обновления } }
+        }
+    }
+    if (-not $что) { return }
+    $script:Оповещено[$что.Ключ] = $true
+    try {
+        $действия = [ordered]@{ 'Обновить' = $что.Действие }
+        Уведомление-Приложения -Заголовок $что.Заголовок -Текст $что.Текст -ЦветСостояния $C.Акцент -Картинка $script:IconPath `
+            -Секунд 30 -ПоЩелчку { Show-Window } -Действия $действия | Out-Null
+        Write-Log ('уведомление: ' + $что.Заголовок)
+    } catch { Write-Log ('уведомление об обновлении не показано: ' + $_.Exception.Message) }
+}
+
+function Кнопка-Обновления {
+    # Кнопка отвечает на вопрос «что обновится»: компьютер (и Deck, если отстаёт) либо только Deck.
+    if ($script:UpdateInfo -or $script:UpdateTask) { return }
+    if (Deck-Отстаёт) {
+        $идёт = ((Get-Date) - $script:DeckAsked).TotalMinutes -lt 3
+        $текст = if ($идёт) { 'Deck обновляется — связь переподключится сама' } else { 'Обновить Deck до {0}' -f $script:Latest }
+        if ($ui.Обновление.Text -ne $текст) { Показать-Обновление $ui $текст }
+        $ui.Обновление.Enabled = -not $идёт
+    } elseif ($ui.Обновление.Visible) {
+        $ui.Обновление.Enabled = $true
+        Скрыть-Обновление $ui
     }
 }
 
@@ -459,7 +659,10 @@ function Шаг-Обновления {
     }
     switch ($этап) {
         'проверка' {
-            $выбор = Выбрать-Обновление ($задача.Result | ConvertFrom-Json) $Version
+            $выпуск = $задача.Result | ConvertFrom-Json
+            $script:Latest = Разобрать-Версию $выпуск.tag_name
+            if ($IsDevCheckout) { return }   # компьютер в рабочей копии обновляет git, не установщик
+            $выбор = Выбрать-Обновление $выпуск $Version
             if (-not $выбор) {
                 $script:UpdateInfo = $null
                 if ($ui.Обновление.Visible) { Скрыть-Обновление $ui }
@@ -468,7 +671,8 @@ function Шаг-Обновления {
             if ($выбор.Пропуск) { Write-Log $выбор.Пропуск; return }
             $script:UpdateInfo = $выбор
             $хвост = if ($выбор.Заметка) { ' — ' + $выбор.Заметка } else { '' }
-            Показать-Обновление $ui ("Обновить до {0}{1}" -f $выбор.Версия, $хвост)
+            $иDeck = if (Deck-Отстаёт) { ' и Deck' } else { '' }
+            Показать-Обновление $ui ("Обновить до {0}{1}{2}" -f $выбор.Версия, $иDeck, $хвост)
             Write-Log ("доступно обновление {0}" -f $выбор.Версия)
         }
         'установщик' {
@@ -484,6 +688,8 @@ function Шаг-Обновления {
 
 function Начать-Обновление {
     if (-not $script:UpdateInfo -or $script:UpdateTask) { return }
+    # Deck обновляется вместе с компьютером, если отстаёт: одна кнопка на оба устройства.
+    if (Deck-Отстаёт) { Попросить-Deck-Обновиться }
     $ui.Обновление.Enabled = $false
     $ui.Обновление.Text = ('Обновляется до {0}…' -f $script:UpdateInfo.Версия)
     $script:UpdateStage = 'установщик'
@@ -532,6 +738,7 @@ function Ярлык-При-Первом-Запуске {
 
 # ==== Окно ===================================================================
 Load-Pair
+Load-Settings
 $ui = New-AppWindow
 $form = $ui.Форма
 $C = $ui.Цвета
@@ -544,13 +751,12 @@ $ni.Visible = $true
 
 # Меню Windows не используется: место оно выбирает верно, но вид у него чужой —
 # светлое меню посреди тёмного приложения читается как всплывшее окно другой
-# программы, и состояния в нём не видно. Вместо него своя плашка (`Новая-Плашка`
-# в оболочке): состояние словом и цветом, шапка открывает окно, под ней тумблер
+# программы, и состояния в нём не видно. Вместо него общее меню библиотеки (`Меню-Трея`
+# в `lib\tray-place.ps1`): состояние словом и цветом, шапка открывает окно, под ней тумблер
 # и выход. Место плашки считает механика `lib\tray-place.ps1` —
 # плашка выходит из панели задач с той стороны, где та реально стоит.
 #
-# Пункта «Настройки» нет потому, что настроек у приложения нет: раскладка экранов
-# живёт в screens.conf, а адрес Deck'а не настраивается вовсе — он находится сам.
+# Настройки — кнопкой в окне: в меню — только частые действия.
 $script:Плашка = $null
 
 function Показать-Плашку {
@@ -570,18 +776,11 @@ function Показать-Плашку {
     if ($работает) { $тумблер = 'Выключить'; $цветТумблера = $C.Тревога }
     else { $тумблер = 'Включить'; $цветТумблера = $C.Акцент }
 
-    $п = Новая-Плашка -Состояние $слово -ЦветСостояния $цвет `
-                      -ТекстТумблера $тумблер -ЦветТумблера $цветТумблера
-    $ф = $п.Форма
+    $пункты = @(@{ Текст = $тумблер; Цвет = $цветТумблера; Действие = { Switch-Server } })
+    if ($подключён) { $пункты += @{ Текст = 'Перейти на Deck'; Действие = { Перейти-На-Deck 'меню значка' } } }
+    $пункты += @{ Текст = 'Закрыть'; Действие = { Выйти-Из-Приложения } }
+    $ф = Меню-Трея -Название 'KVM' -ЦветСостояния $цвет -Подсказка $слово -ОткрытьОкно { Show-Window } -Пункты $пункты
     $script:Плашка = $ф
-    $открыть = { try { $script:Плашка.Close() } catch { }; Show-Window }
-    $п.Шапка.Add_Click($открыть)
-    # Щелчок по надписи до панели под ней не доходит: надпись — свой контрол и
-    # событие съедает. Без этого шапка открывала бы окно только по пустому месту.
-    foreach ($н in $п.Надписи) { $н.Add_Click($открыть) }
-    $п.Тумблер.Add_Click({ try { $script:Плашка.Close() } catch { }; Switch-Server })
-    $п.Выход.Add_Click({ try { $script:Плашка.Close() } catch { }; Выйти-Из-Приложения })
-    $ф.Add_Deactivate({ try { $this.Close() } catch { } })
     $ф.Show()
     $ф.Activate()
 }
@@ -590,13 +789,13 @@ function Показать-Плашку {
 function Update-View {
     $работает = Test-ServerRunning
     $подключён = $работает -and (Test-DeckConnected)
-    if (Get-Command Обновить-Окно-Deck -ErrorAction SilentlyContinue) { Обновить-Окно-Deck $подключён }
     $видели = ((Get-Date) - $script:DeckSeen).TotalSeconds -lt 15
 
+    Обновить-Окно-Deck ($подключён -and $script:Settings.alt_tab)
     if ($подключён) {
         $ui.Точка.ForeColor = $C.Успех
         $ui.Состояние.Text = 'Работает — Deck подключён'
-        $ui.Подсказка.Text = 'На Deck — край экрана или Alt+Tab на окно «Steam Deck». Обратно — Alt+Tab на Deck''е.'
+        $ui.Подсказка.Text = Подсказка-Перехода
     } elseif ($работает -and $видели) {
         $ui.Точка.ForeColor = $C.Ожидание
         $ui.Состояние.Text = 'Включено — Deck отвечает'
@@ -614,8 +813,13 @@ function Update-View {
     $ui.Тумблер.Text = if ($работает) { 'Выключить' } else { 'Включить' }
     $ui.Тумблер.BackColor = if ($работает) { $C.Тревога } else { $C.Акцент }
 
+    $версияDeck = if ($script:DeckVersion) { ' · версия ' + $script:DeckVersion } else { '' }
+    if ($script:DeckVersion -and $script:Latest -and $script:DeckVersion -lt $script:Latest) { $версияDeck += ', отстаёт' }
+    # Deck до этой версии номера не сообщает и просьбу компьютера не понимает — первый раз его
+    # обновляют на нём самом, дальше — кнопкой здесь.
+    elseif ($подключён -and -not $script:DeckVersion) { $версияDeck = ' · обновите один раз на самом Deck''е' }
     if ($подключён) {
-        $ui.Факты['Steam Deck'].Text = '{0} · подключён' -f $script:Pair.deck_name
+        $ui.Факты['Steam Deck'].Text = '{0} · подключён{1}' -f $script:Pair.deck_name, $версияDeck
         $ui.Факты['Steam Deck'].ForeColor = $C.Успех
     } elseif ($видели) {
         $ui.Факты['Steam Deck'].Text = '{0} · в сети, ещё не подключён' -f $script:Pair.deck_name
@@ -629,9 +833,9 @@ function Update-View {
     }
 
     $ui.Факты['Этот компьютер'].Text = '{0} · {1}' -f $env:COMPUTERNAME, (Get-LocalAddress)
-    $ui.Факты['Переход'].Text = 'край экрана · Alt+Tab на «Steam Deck» · Ctrl+Alt+стрелки'
     $ui.Факты['Версия'].Text = if ($IsDevCheckout) { "$Version · рабочая копия" } else { $Version }
-    (Кнопка 'Забыть Deck').Enabled = [bool]$script:Pair.deck_id
+    (Кнопка 'Перейти на Deck').Enabled = $подключён
+    Кнопка-Обновления
 
     $ni.Icon = Значок-Трея
     $ni.Text = if ($подключён) { 'Общая клавиатура и мышь — Deck подключён' }
@@ -639,6 +843,17 @@ function Update-View {
                else { 'Общая клавиатура и мышь — выключено' }
     # Состояние плашки не обновляется по часам: плашка живёт секунды и собирается
     # заново на каждое нажатие, спрашивая состояние у системы в этот момент.
+}
+
+function Подсказка-Перехода {
+    # Подсказка называет ровно те способы, что включены в настройках: кнопка работает всегда.
+    $туда = @()
+    if ($script:Settings.alt_tab) { $туда += 'Alt+Tab на окно «Steam Deck»' }
+    if ($script:Settings.edge) { $туда += 'край экрана' }
+    $туда += 'кнопка «Перейти на Deck»'
+    $обратно = if ($script:Settings.alt_tab) { 'Alt+Tab на Deck''е' } else { 'кнопка «На компьютер» в окне Deck''а' }
+    if ($script:Settings.edge) { $обратно += ' или край экрана' }
+    return ('На Deck — {0}. Обратно — {1}.' -f ($туда -join ', '), $обратно)
 }
 
 function Switch-Server {
@@ -656,7 +871,7 @@ function Show-Window {
     Поднять-Наверх $form
     # В журнал идёт ФАКТ от системы, а не намерение формы: свёрнутое окно
     # отвечает «Normal», и запись «окно показано» была бы неотличима от правды.
-    Write-Log ('окно показано, видимость={0}, свёрнуто={1}' -f $form.Visible, [Win32.Dwm]::IsIconic($form.Handle))
+    Write-Log ('окно показано, видимость={0}, свёрнуто={1}' -f $form.Visible, ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized))  # без чужого внутреннего типа библиотеки: он переименовывался
 }
 
 # ==== Обработчики ============================================================
@@ -675,7 +890,11 @@ function Кнопка([string]$Имя) {
 }
 
 $ui.Тумблер.Add_Click({ Switch-Server })
-$ui.Обновление.Add_Click({ if ($script:UpdateInfo) { Начать-Обновление } else { Начать-Проверку-Обновления } })
+$ui.Обновление.Add_Click({
+    if ($script:UpdateInfo) { Начать-Обновление }
+    elseif (Deck-Отстаёт) { Попросить-Deck-Обновиться; Кнопка-Обновления }
+    else { Начать-Проверку-Обновления }
+})
 $ni.Add_MouseDoubleClick({ Show-Window })
 # ЛКМ — окно, ПКМ — плашка. Оба поднимаются на MouseUp: меню Windows открывалось
 # бы на нём же, и своя плашка обязана отзываться так же, иначе нажатие ощущается
@@ -686,14 +905,30 @@ $ni.Add_MouseUp({
     elseif ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Window }
 })
 
-(Кнопка 'Журнал').Add_Click({
+(Кнопка 'Перейти на Deck').Add_Click({ Перейти-На-Deck 'кнопка в окне' })
+
+# Журнал — окно приложения, а не текстовый файл в Блокноте. Одно окно: повторное нажатие поднимает
+# открытое. Строки подтягиваются часами приложения, пока окно открыто.
+$script:ОкноЖурнала = $null
+function Строки-Журнала([int]$Сколько = 400) {
+    if (-not (Test-Path -LiteralPath $LogFile)) { return @() }
     try {
-        if (Test-Path $LogFile) { Start-Process notepad.exe $LogFile }
-        else { Показать-Сообщение -Заголовок 'Журнал пуст' -Владелец $form -Текст 'Приложение ещё ничего не записало.' | Out-Null }
-    } catch { }
+        $поток = New-Object System.IO.FileStream($LogFile, 'Open', 'Read', 'ReadWrite')
+        $чтец = New-Object System.IO.StreamReader($поток, [System.Text.Encoding]::UTF8)
+        $все = $чтец.ReadToEnd() -split "`r?`n" | Where-Object { $_ }
+        $чтец.Dispose()
+        return @($все | Select-Object -Last $Сколько)
+    } catch { return @('журнал не прочитан: ' + $_.Exception.Message) }
+}
+(Кнопка 'Журнал').Add_Click({
+    if ($script:ОкноЖурнала -and -not $script:ОкноЖурнала.Форма.IsDisposed) { Поднять-Наверх $script:ОкноЖурнала.Форма; return }
+    $script:ОкноЖурнала = New-LogWindow
+    Заполнить-Журнал $script:ОкноЖурнала.Текст (Строки-Журнала)
+    $script:ОкноЖурнала.Форма.Add_FormClosed({ $script:ОкноЖурнала = $null })
+    $script:ОкноЖурнала.Форма.Show($form)
 })
 
-(Кнопка 'Настроить Deck').Add_Click({
+function Показать-Установку-Deck {
     $ответ = Показать-Сообщение -Заголовок 'Настройка Steam Deck' -Владелец $form -Действие 'Открыть выпуски' -СпроситьДаНет -Текст @"
 Один раз, три шага:
 
@@ -701,14 +936,14 @@ $ni.Add_MouseUp({
 2. Нажмите на скачанный ярлык — он сам скачает и установит программу. Если Firefox дописал к имени «.download», уберите это окончание.
 3. Здесь нажмите «Включить».
 
-Дальше Deck находит компьютер сам — в игровом режиме, после перезагрузки и в другой сети. Обновления приходят кнопкой в окне, на ПК и на Deck'е.
+Дальше Deck находит компьютер сам — в игровом режиме, после перезагрузки и в другой сети. Обновления компьютер ставит на оба устройства сам.
 "@
     if ($ответ -eq [System.Windows.Forms.DialogResult]::Yes) {
         try { Start-Process $ReleasesPage } catch { Write-Log ('страница выпусков не открылась: ' + $_.Exception.Message) }
     }
-})
+}
 
-(Кнопка 'Забыть Deck').Add_Click({
+function Спросить-Забыть-Deck {
     $ответ = Показать-Сообщение -Заголовок 'Забыть этот Deck' -Владелец $form -Действие 'Забыть' -СпроситьДаНет -Текст @"
 Приложение перестанет узнавать Deck «$($script:Pair.deck_name)» и познакомится со следующим, который откликнется в этой сети.
 
@@ -717,7 +952,31 @@ $ni.Add_MouseUp({
     if ($ответ -eq [System.Windows.Forms.DialogResult]::Yes) {
         Forget-Deck
         Update-View
+        return $true
     }
+    return $false
+}
+
+# Настройки — общее окно библиотеки; сохранённый выбор применяется сразу: раскладка сервера пересобирается и
+# сервер перезапускается, только если изменился край или сторона — прочее сервер не читает.
+function Применить-Настройки($Значения) {
+    $прежние = @{} + $script:Settings
+    foreach ($к in @('alt_tab', 'edge', 'side')) { if ($Значения.ContainsKey($к)) { $script:Settings[$к] = $Значения[$к] } }
+    Save-Settings
+    Write-Log ('настройки: Alt+Tab {0}, край {1}, Deck {2}' -f $script:Settings.alt_tab, $script:Settings.edge, $script:Settings.side)
+    if (($прежние.edge -ne $script:Settings.edge -or $прежние.side -ne $script:Settings.side) -and (Ensure-Config) -and (Test-ServerRunning)) {
+        Write-Log 'раскладка изменилась — сервер перезапущен'
+        Stop-Server; Start-Sleep -Milliseconds 300; Start-Server
+    }
+    Send-Beacon (Test-ServerRunning)
+    Update-View
+}
+
+(Кнопка 'Настройки').Add_Click({
+    $описание = Описание-Настроек -Настройки $script:Settings -ИмяDeck ([string]$script:Pair.deck_name) `
+        -Забыть { Спросить-Забыть-Deck | Out-Null } -Установка { Показать-Установку-Deck }
+    Окно-Настроек -Заголовок 'Общая клавиатура и мышь — настройки' -Значок (Значок-Приложения) -Вкладки $описание `
+        -Владелец $form -Сохранить { param($значения) Применить-Настройки $значения } | Out-Null
 })
 
 # Application::Exit() закрывает форму повторно, и обработчик входит сам в себя —
@@ -747,6 +1006,7 @@ $form.Add_FormClosing({
     }
     $script:Quitting = $true
     $timer.Stop()
+    $focusTimer.Stop()
     $ni.Visible = $false
     Write-Log '=== выход ==='
     [System.Windows.Forms.Application]::Exit()
@@ -773,91 +1033,6 @@ function Выйти-Из-Приложения {
     [System.Windows.Forms.Application]::Exit()
 }
 
-# ==== Steam Deck — окно в списке Alt+Tab =====================================
-# Переход на Deck по Alt+Tab, как на соседнее окно. Горячая клавиша Deskflow на Alt+Tab отняла бы
-# у Windows переключение окон целиком: сервер перехватывает сочетание на любом экране. Поэтому
-# Deck стоит в списке Alt+Tab и на панели задач отдельным невидимым окном «Steam Deck» со значком
-# приложения. Выбрали его — фокус возвращается окну, где человек работал, а курсор уводится за
-# край экрана в сторону Deck'а: сервер переводит клавиатуру и мышь сам, как при движении мыши.
-# Программный курсор сервер видит, пока управление на ПК (`MSWindowsHook.cpp`: программный ввод
-# пропускается только на чужом экране). Обратно — Alt+Tab на Deck'е: служба Deck'а снимает сеанс,
-# и сервер возвращает курсор на ПК.
-Add-Type -Namespace Win32 -Name DeckJump -MemberDefinition @'
-[DllImport("user32.dll")] public static extern void mouse_event(int flags, int dx, int dy, int data, IntPtr extra);
-[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
-[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
-'@
-
-$script:ПрежнееОкно = [IntPtr]::Zero
-$script:ПрыжокИдёт = $false
-
-function Сторона-Deck {
-    # Сторона берётся из той же раскладки, что читает сервер: иначе курсор ушёл бы не в тот край.
-    $имяПК = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'pc' }
-    try {
-        $текст = [System.IO.File]::ReadAllText($ScreensConf)
-        if ($текст -match ('(?ms)^\s*' + [regex]::Escape($имяПК) + ':\s*\r?\n\s*left\s*=\s*steamdeck')) { return 'left' }
-    } catch { Write-Log ('сторона Deck''а не прочитана, беру правую: ' + $_.Exception.Message) }
-    return 'right'
-}
-
-function Перейти-На-Deck {
-    if ($script:ПрыжокИдёт) { return }
-    $script:ПрыжокИдёт = $true
-    try {
-        [Win32.DeckJump]::ShowWindow($deckForm.Handle, 7) | Out-Null     # SW_SHOWMINNOACTIVE — снова свёрнуто
-        if ($script:ПрежнееОкно -ne [IntPtr]::Zero) { [Win32.DeckJump]::SetForegroundWindow($script:ПрежнееОкно) | Out-Null }
-        $справа = (Сторона-Deck) -eq 'right'
-        $экраны = [System.Windows.Forms.Screen]::AllScreens
-        $край = if ($справа) { $экраны | Sort-Object { $_.Bounds.Right } -Descending | Select-Object -First 1 }
-                else { $экраны | Sort-Object { $_.Bounds.Left } | Select-Object -First 1 }
-        $x = if ($справа) { $край.Bounds.Right - 2 } else { $край.Bounds.Left + 1 }
-        $y = $край.Bounds.Top + [int]($край.Bounds.Height / 2)
-        [Win32.DeckJump]::SetCursorPos($x, $y) | Out-Null
-        $шаг = if ($справа) { 40 } else { -40 }
-        for ($i = 0; $i -lt 6; $i++) {
-            [Win32.DeckJump]::mouse_event(1, $шаг, 0, 0, [IntPtr]::Zero)   # MOUSEEVENTF_MOVE — видит перехват сервера
-            Start-Sleep -Milliseconds 15
-        }
-        Write-Log 'выбрано окно «Steam Deck» — курсор уведён на Deck'
-    } catch {
-        Write-Log ('переход на Deck по Alt+Tab не удался: ' + $_.Exception.Message)
-    } finally {
-        $script:ПрыжокИдёт = $false
-    }
-}
-
-$deckForm = New-Object System.Windows.Forms.Form
-$deckForm.Text = 'Steam Deck'
-$deckForm.ShowInTaskbar = $true
-$deckForm.FormBorderStyle = 'None'
-$deckForm.Opacity = 0
-$deckForm.StartPosition = 'Manual'
-$deckForm.Location = New-Object System.Drawing.Point(-32000, -32000)
-$deckForm.Size = New-Object System.Drawing.Size(1, 1)
-$deckForm.Icon = Значок-Трея
-$deckForm.Add_Activated({ Перейти-На-Deck })
-$script:DeckWindowShown = $false
-
-function Обновить-Окно-Deck([bool]$Подключён) {
-    # Окно есть в списке, только пока Deck подключён: иначе Alt+Tab вёл бы в никуда.
-    if ($Подключён -eq $script:DeckWindowShown) { return }
-    $script:DeckWindowShown = $Подключён
-    if ($Подключён) { [Win32.DeckJump]::ShowWindow($deckForm.Handle, 7) | Out-Null }   # свёрнуто, без фокуса
-    else { [Win32.DeckJump]::ShowWindow($deckForm.Handle, 0) | Out-Null }              # SW_HIDE
-}
-
-# Окно, где человек работал до Alt+Tab, запоминается часто: после перехода на Deck и возврата
-# фокус должен стоять там же, а не на невидимом окне.
-$focusTimer = New-Object System.Windows.Forms.Timer
-$focusTimer.Interval = 250
-$focusTimer.Add_Tick({
-    $окно = [Win32.DeckJump]::GetForegroundWindow()
-    if ($окно -ne [IntPtr]::Zero -and $окно -ne $deckForm.Handle) { $script:ПрежнееОкно = $окно }
-})
-
 # ==== Часы приложения ========================================================
 # Один таймер на всё: рассылка маячка, разбор ответов Deck'а, сверка вида с фактом.
 $timer = New-Object System.Windows.Forms.Timer
@@ -875,7 +1050,9 @@ $timer.Add_Tick({
             Начать-Проверку-Обновления
         }
         Шаг-Обновления
+        Сообщить-Об-Обновлении
         Update-View
+        if ($script:ОкноЖурнала -and -not $script:ОкноЖурнала.Форма.IsDisposed) { Заполнить-Журнал $script:ОкноЖурнала.Текст (Строки-Журнала) }
         if ($script:Stranger) {
             $чужой = $script:Stranger
             $script:Stranger = $null

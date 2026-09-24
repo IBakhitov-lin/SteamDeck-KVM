@@ -3,8 +3,8 @@
 control_api_facade.py
 
 Окно на Deck'е — отдельная программа, служба — отдельная. Окно спрашивает службу через этот
-интерфейс: состояние, журнал, действия «забыть компьютер», «обновить», «перезапустить».
-Фасад инфраструктуры в корне `core/`, суффикса роли не несёт — по тому же исключению канона
+интерфейс: состояние, журнал, действия «на компьютер», «забыть компьютер», «обновить», «перезапустить».
+Фасад инфраструктуры в корне `core/`, суффикса роли не несёт — по тому же исключению
 слоёв, что политика конфигурации.
 
 Три решения защиты, и каждое закрывает свой путь.
@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from core import config_policy
 
 ACTION_HEADER = "X-SteamDeck-KVM"
-ACTIONS = ("forget", "update", "restart", "uninstall_keep", "uninstall_all")
+ACTIONS = ("to_pc", "forget", "update", "restart", "uninstall_keep", "uninstall_all")
 
 
 class ControlApiFacade:

@@ -18,11 +18,12 @@ raw.githubusercontent.com недоступен, а github.com открывает
 считает GitHub (поле `digest`), отдельный файл сумм не нужен.
 Третий файл `dist/RELEASE_NOTES.md` — текст выпуска для `gh release`, в выпуск не прикладывается.
 
-Копии общих файлов берутся из папки общих исходников В МОМЕНТ СБОРКИ, если она задана настройкой
-`steamdeck-kvm.shared-source`: копия, лежащая в репозитории месяцами, расходится с исходником
-молча. Из копий вычищаются имена приватных проектов и пути рабочей машины — архив публичный.
+Общая библиотека и палитра берутся из папки общих исходников В МОМЕНТ СБОРКИ (настройка
+`steamdeck-kvm.shared-source`) и кладутся только в установщик и ярлык Deck'а: в репозитории
+копий, правленных руками, нет: apps/pc/lib и apps/palette.json кладёт этот же сборщик (ключ --копии). Из копий вычищаются имена приватных
+проектов и пути рабочей машины — архив публичный.
 
-Запуск:  python private_tools/scripts/build_release_script.py [--проверить | --копии]
+Запуск:  python private_tools/scripts/build_release_script.py [--проверить]
 Код возврата: 0 — собрано и сверено; 1 — сборка отклонена с названной причиной.
 """
 
@@ -45,7 +46,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist"
 # Папка общих исходников сопровождающего — локальная настройка, в историю не попадает:
 #     git config steamdeck-kvm.shared-source /path/to/shared
-# Не задана — копии в apps/pc/lib и apps/palette.json берутся как есть.
+# Не задана — выпуск не собирается: общая библиотека берётся только из общих исходников.
 def _shared_source() -> Path | None:
     try:
         value = subprocess.run(["git", "-C", str(ROOT), "config", "--get", "steamdeck-kvm.shared-source"],
@@ -81,7 +82,24 @@ def load_private_words():
                                          pattern.flags), word))
     PRIVATE_WORDS.append((re.compile(r"(?i)[a-z]:[\\/]+users[\\/]+[^\\/\s`'\")]+"), "<папка пользователя>"))
 
-PALETTE_KEYS = ("тёмная", "светлая", "типографика", "радиусы", "значок", "оболочка")
+# В копию контракта идут ВСЕ его разделы, кроме служебных (имя с «_»): список разрешённых разделов
+# терял новые — раздел «стекло» 24.09.2026 не попал в копию, и окно приложения не собиралось.
+def palette_sections(data: dict) -> dict:
+    """Разделы контракта без служебных полей на любой глубине: в пояснениях («_назначение», «_окно»)
+    живут история правок и адреса правил автора, а публичный репозиторий самодостаточен."""
+    def clean(value):
+        if isinstance(value, dict):
+            return {k: clean(v) for k, v in value.items() if not str(k).startswith("_")}
+        return value
+    return {key: clean(value) for key, value in data.items() if not key.startswith("_")}
+
+
+def strip_comments(text: str) -> str:
+    """Код копии без строчных комментариев и блоков <# #>: в них история, имена соседних проектов и
+    ссылки на правила автора. Строки кода не трогаются — сверка копии с исходником идёт по ним."""
+    text = re.sub(r"(?s)<#.*?#>", "", text)
+    lines = [line for line in text.replace("\r\n", "\n").split("\n") if not line.lstrip().startswith("#")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 
 
 def fail(message: str) -> int:
@@ -105,40 +123,50 @@ def sanitize(text: str) -> str:
     return text
 
 
-def refresh_vendored_copies() -> list[str]:
-    """Обновить копии общих файлов в репозитории из общих исходников; не заданы — копии остаются как есть."""
-    notes = []
+SHARED_LIBS = ("tray-common.ps1", "tray-place.ps1", "app-shell.ps1")
+
+
+def shared_source() -> Path:
+    """Папка общих исходников; без неё выпуск не собирается — своих копий в репозитории нет."""
     if AI is None:
-        return ["общие исходники не заданы — копии общих файлов взяты из репозитория как есть"]
-    pairs = [
-        (AI / ".code" / "scripts" / "lib" / "tray-common.ps1", ROOT / "apps" / "pc" / "lib" / "tray-common.ps1"),
-        (AI / ".code" / "scripts" / "lib" / "tray-place.ps1", ROOT / "apps" / "pc" / "lib" / "tray-place.ps1"),
-    ]
-    for source, target in pairs:
-        # Пропавший исходник — отказ сборки, а не заметка: копия по старому пути молча не
-        # обновлялась с переезда общих скриптов, и трей отставал от канона.
+        raise SystemExit(fail("не задана папка общих исходников: git config steamdeck-kvm.shared-source <папка общих исходников>"))
+    return AI
+
+
+def public_palette() -> bytes:
+    """Палитра для установщика и ярлыка Deck'а — из общего контракта вида в момент сборки, без приватных полей."""
+    source = shared_source() / "templates" / "palette.json"
+    if not source.is_file():
+        raise SystemExit(fail("нет контракта вида %s" % source))
+    data = json.loads(source.read_text(encoding="utf-8-sig"))
+    public = {"_назначение": "Контракт вида приложения: цвета, гарнитура, радиусы, значок и размеры оболочки. "
+                             "Собран build_release_script.py из общего исходника при сборке выпуска."}
+    public.update(palette_sections(data))
+    return (json.dumps(public, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
+def stage_shared(target: Path, with_palette: bool = True) -> None:
+    """Положить общую библиотеку и палитру в папку lib\\ установщика — единственное место, где у
+    публичного приложения лежат копии: их кладёт только сборщик, руками они не правятся."""
+    target.mkdir(parents=True, exist_ok=True)
+    for name in SHARED_LIBS:
+        source = shared_source() / ".code" / "scripts" / "lib" / name
         if not source.is_file():
-            raise SystemExit(fail("нет общего исходника %s — копия осталась бы старой молча" % source))
+            raise SystemExit(fail("нет общего исходника %s" % source))
         text = source.read_bytes().decode("utf-8-sig")
-        header = "# КОПИЯ общего модуля, собранная build_release_script.py из общего исходника.\n" \
-                 "# Правится исходник, а не копия: копия перезаписывается при каждой сборке выпуска.\n"
-        target.parent.mkdir(parents=True, exist_ok=True)
+        header = "# Файл общей библиотеки, положенный сборщиком выпуска. Правится исходник, а не он.\n"
         # Скрипт PowerShell с кириллицей обязан нести метку кодировки — иначе интерпретатор читает
         # его как однобайтовый и спотыкается на первой же русской строке.
-        target.write_bytes(b"\xef\xbb\xbf" + (header + detach(sanitize(text))).encode("utf-8"))
-        notes.append("копия обновлена: %s" % target.relative_to(ROOT))
+        (target / name).write_bytes(b"\xef\xbb\xbf" + (header + detach(sanitize(strip_comments(text)))).encode("utf-8"))
+    if with_palette:
+        (target / "palette.json").write_bytes(public_palette())
 
-    palette_source = AI / "templates" / "palette.json"
-    if palette_source.is_file():
-        data = json.loads(palette_source.read_text(encoding="utf-8-sig"))
-        public = {"_назначение": "Копия контракта палитры для публичного репозитория: цвета, гарнитура, радиусы и "
-                                 "значок. Собирается build_release_script.py из общего исходника; у себя эту копию "
-                                 "можно менять свободно — вид приложения поменяется только у вас."}
-        public.update({key: data[key] for key in PALETTE_KEYS if key in data})
-        (ROOT / "apps" / "palette.json").write_text(json.dumps(public, ensure_ascii=False, indent=2) + "\n",
-                                                     encoding="utf-8")
-        notes.append("копия палитры обновлена: apps/palette.json")
-    return notes
+
+def refresh_repo_copies() -> None:
+    """Файлы общей библиотеки в репозитории — чтобы публичный клон запускался: кладутся той же функцией,
+    что и в установщик, руками не правятся, сверяет их check-shared-copies.py."""
+    stage_shared(ROOT / "apps" / "pc" / "lib")  # палитра рядом с библиотекой — её читает Контракт-Вида
+    (ROOT / "apps" / "palette.json").write_bytes(public_palette())
 
 
 def build_icons() -> None:
@@ -159,7 +187,7 @@ def _skip(path: Path) -> bool:
 
 
 PC_REQUIRED = ("SteamDeck-KVM.vbs", "SteamDeck-KVM.ps1", "app-window.ps1", "app-update.ps1",
-               "lib/tray-common.ps1", "lib/tray-place.ps1", "lib/palette.json", "VERSION",
+               "lib/tray-common.ps1", "lib/tray-place.ps1", "lib/app-shell.ps1", "lib/palette.json", "VERSION",
                "SteamDeck-KVM.ico", "LICENSE")
 
 
@@ -177,11 +205,14 @@ def stage_pc(version: str, stage: Path) -> list[str]:
     """Разложить приложение ПК во временную папку так, как оно ляжет на машину человека."""
     pc = ROOT / "apps" / "pc"
     for path in sorted(pc.rglob("*")):
+        # lib\\ кладётся в установщик заново из общих исходников ниже, а не копируется из рабочей копии.
+        if path.relative_to(pc).parts[0] == "lib":
+            continue
         if path.is_file() and not _skip(path):
             target = stage / path.relative_to(pc)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, target)
-    shutil.copyfile(ROOT / "apps" / "palette.json", stage / "lib" / "palette.json")
+    stage_shared(stage / "lib")
     (stage / "VERSION").write_text(version + "\n", encoding="utf-8")
     shutil.copyfile(ROOT / "LICENSE", stage / "LICENSE")
     problems = ["в установщик ПК не попал %s" % need for need in PC_REQUIRED if not (stage / need).is_file()]
@@ -241,7 +272,7 @@ def deck_payload(version: str) -> bytes:
                 if path.is_file() and not _skip(path):
                     rel = path.relative_to(ROOT).as_posix()
                     add(tar, path.read_bytes(), rel, executable=path.suffix == ".sh")
-        add(tar, (ROOT / "apps" / "palette.json").read_bytes(), "apps/palette.json")
+        add(tar, public_palette(), "apps/palette.json")
         add(tar, (version + "\n").encode(), "VERSION")
     return buffer.getvalue()
 
@@ -302,14 +333,15 @@ def main() -> int:
         pass
     parser = argparse.ArgumentParser(description="Сборка выпуска SteamDeck-KVM")
     parser.add_argument("--проверить", action="store_true", help="только сверить уже собранное в dist/")
-    parser.add_argument("--копии", action="store_true", help="только обновить копии общих файлов, без сборки")
+    parser.add_argument("--копии", action="store_true", help="только обновить файлы общей библиотеки в apps/pc/lib из общих исходников")
     args = parser.parse_args()
 
     if args.копии:
         load_private_words()
-        for note in refresh_vendored_copies():
-            print("  " + note)
+        refresh_repo_copies()
+        print("  файлы общей библиотеки и палитра обновлены из общих исходников: apps/pc/lib, apps/palette.json")
         return 0
+
 
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
@@ -323,8 +355,7 @@ def main() -> int:
 
     if not args.проверить:
         load_private_words()
-        for note in refresh_vendored_copies():
-            print("  " + note)
+        refresh_repo_copies()
         build_icons()
         if DIST.exists():
             shutil.rmtree(DIST)

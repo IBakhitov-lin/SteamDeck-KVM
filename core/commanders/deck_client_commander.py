@@ -7,6 +7,11 @@ deck_client_commander.py
 сети. Сам командир решает только порядок: куда подключаться, когда разорвать связь, когда
 сменить способ движения курсора.
 
+Alt+Tab в игровом режиме возвращает управление на компьютер: окон там нет, и сочетание
+свободно. Deck не может приказать серверу сменить экран — он просит об этом приложение на
+компьютере, а оно нажимает служебную клавишу сервера; связь при этом не рвётся. На рабочем
+столе Alt+Tab доходит до окон Deck'а, среди них окно «Компьютер» — его выбор и есть возврат.
+
 Два правила защиты живут здесь, потому что оба решают, БЫТЬ ли сеансу.
 
 1. **Погас экран Deck'а — связь снимается.** Пока клиент подключён, сервер уводит курсор на его
@@ -111,6 +116,7 @@ class DeckClientCommander:
         self._awaiting_centre = False
         self._announced_virtual = False
         self._stale_until_inside = False
+        self._swallowed = set()          # скан-коды проглоченных клавиш: их отпускание тоже не уходит
 
     # ---- журнал и состояние ---------------------------------------------------
 
@@ -130,6 +136,7 @@ class DeckClientCommander:
             data = self.status.to_dict()
             data["log"] = list(self.lines)[-40:]
         if self.discovery:
+            data["alt_tab"] = self.discovery.flags.get("alttab", True)
             data["paired"] = bool(self.discovery.peer)
             data["pc_name"] = data["pc_name"] or self.discovery.peer_name
             data["pc_address"] = data["pc_address"] or self.discovery.address or self.discovery.recall()
@@ -197,7 +204,7 @@ class DeckClientCommander:
         self.set_status(captured=want)
         self.log("игра %s курсор — %s" % (
             "захватила" if want else "отпустила",
-            "мышь крутит камеру без упора в край, на компьютер курсор не уходит (выход — Alt+Tab)"
+            "мышь крутит камеру без упора в край, на компьютер курсор не уходит (выход — Alt+Tab или кнопка)"
             if want else "курсор свободен, край экрана снова ведёт на компьютер"))
         if self._wire is None:
             return
@@ -279,6 +286,8 @@ class DeckClientCommander:
         """Принять действие из окна. Выполняется в потоке службы, а не в потоке запроса."""
         if name == "forget" and not self.discovery:
             return False, "поиск по сети выключен — забывать нечего"
+        if name == "to_pc" and self.status.state != CONNECTED:
+            return False, "компьютер не подключён"
         self.actions.put(name)
         return True, "принято"
 
@@ -288,12 +297,26 @@ class DeckClientCommander:
                 name = self.actions.get_nowait()
             except queue.Empty:
                 return
+            if name == "to_pc":
+                self.return_to_pc("окно Deck'а")
             if name == "forget" and self.discovery:
                 self.discovery.forget()
                 self.set_status(pc_name=None, pc_address=None, paired=False)
                 self.log("компьютер забыт — следующий откликнувшийся в сети станет знакомым")
                 if in_session:
                     raise SessionEnded("компьютер забыт")
+
+    def return_to_pc(self, source):
+        """Попросить компьютер вернуть клавиатуру и мышь. Связь не рвётся."""
+        if self.discovery and self.discovery.send_to_pc():
+            self.log("возврат на компьютер: %s" % source)
+        else:
+            self.log("возврат на компьютер (%s) не ушёл: маячка компьютера нет дольше 15 секунд" % source)
+
+    def _alt_tab_returns(self):
+        """Alt+Tab возвращает на компьютер только в игровом режиме и если это не выключено на ПК."""
+        flags = self.discovery.flags if self.discovery else {}
+        return self.mode != DESKTOP and flags.get("alttab", True)
 
     # ---- разбор сообщений -----------------------------------------------------
 
@@ -358,8 +381,18 @@ class DeckClientCommander:
                 physical = scan_to_key(u2(msg, 8)) is not None
                 self.log("клавиши приходят %s" % ("физическими — язык выбирает раскладка Deck'а, Alt+Shift"
                                                   if physical else "символами — сервер не прислал скан-код"))
-            if code == b"DKDN" and self._is_alt_tab(msg):
-                raise SessionEnded("Alt+Tab — управление возвращено на компьютер")
+            if code == b"DKRP":
+                button = u2(msg, 10) if len(msg) >= 12 else 0     # у повтора скан-код за числом повторов
+            else:
+                button = u2(msg, 8) if len(msg) >= 10 else 0
+            if code == b"DKDN" and self._is_alt_tab(msg) and self._alt_tab_returns():
+                self._swallowed.add(button)
+                self.return_to_pc("Alt+Tab в игре")
+                return
+            if code in (b"DKUP", b"DKRP") and button in self._swallowed:
+                if code == b"DKUP":
+                    self._swallowed.discard(button)
+                return
             officer.handle_key(code, msg)
             self.set_status(held_keys=officer.held_keys())
         elif code in (b"DSOP", b"CROP", b"CSEC", b"CCLP", b"DCLP", b"LSYN", b"SECN", b"DDRG", b"DFTR"):
@@ -371,12 +404,7 @@ class DeckClientCommander:
 
     @staticmethod
     def _is_alt_tab(msg):
-        """Tab при зажатом Alt — выход на компьютер из игры и с рабочего стола Deck'а.
-
-        Deck не может приказать серверу переключить экран, но сервер сам возвращает курсор на
-        компьютер, когда клиент уходит из сеанса. Сеанс поэтому снимается и тут же поднимается
-        заново: переход занимает доли секунды, а клавиша работает и там, где курсора нет.
-        """
+        """Tab при зажатом Alt: по скан-коду Tab (0x0F), без него — по символу Tab."""
         if len(msg) < 8:
             return False
         key_id, mask = u2(msg, 4), u2(msg, 6)
