@@ -1,4 +1,4 @@
-# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Песочница Steam Deck: установка выпуска 1.1.0 и обновление кнопкой до последнего выпуска
+# НАЗНАЧЕНИЕ ЭТОГО МОДУЛЯ — Песочница Steam Deck: установка выпуска 0.4.1 и обновление кнопкой до последнего выпуска
 """
 test_update_sandbox.py
 
@@ -27,13 +27,27 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import urllib.request
 from pathlib import Path
 
 import pytest
 
-FROM_VERSION = "1.1.0"
+# Выпуски до 0.4.1 внутри несут прежнюю нумерацию 1.x (перенумерация 25.09.2026): для них 0.x не новее,
+# и сами они не обновляются. Начало проверки — первый выпуск новой нумерации.
+FROM_VERSION = "0.4.1"
 IMAGE = "python:3.12-slim"
 REPO = "IBakhitov-lin/SteamDeck-KVM"
+
+
+def _latest_tag() -> str:
+    """Метка последнего выпуска по перенаправлению github.com; сеть недоступна — пустая строка."""
+    request = urllib.request.Request(f"https://github.com/{REPO}/releases/latest", headers={"User-Agent": "tests"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 — адрес свой
+            final = response.geturl()
+    except OSError:
+        return ""
+    return final.rstrip("/").rsplit("/tag/", 1)[-1] if "/tag/" in final else ""
 SCENARIO = (Path(__file__).with_name("update_sandbox_scenario.sh")).read_text(encoding="utf-8")
 
 
@@ -85,6 +99,8 @@ def _runner(work: Path):
 
 
 def test_update_from_old_release_to_latest_in_deck_sandbox():
+    if _latest_tag().lstrip("v") == FROM_VERSION:
+        pytest.skip(f"последний выпуск и есть {FROM_VERSION} — обновляться не до чего; проверка оживёт со следующим выпуском")
     work = Path(tempfile.mkdtemp(prefix="deck-sandbox-"))
     (work / "scenario.sh").write_bytes(SCENARIO.replace("\r\n", "\n").encode("utf-8"))
     команда = _runner(work)
