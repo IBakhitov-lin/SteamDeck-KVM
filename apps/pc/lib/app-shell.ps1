@@ -434,6 +434,134 @@ function Тёмная-Шапка($окно) {
     if ($окно.IsHandleCreated) { & $применить } else { $окно.Add_HandleCreated($применить) }
 }
 
+function Шапка-Окна {
+    
+    param($окно, [string]$Заголовок = '', $Значок = $null)
+    if ($окно.PSObject.Properties['СвояШапка']) { return }
+    if (-not ('AppShell.Frame' -as [type])) {
+        Add-Type -Namespace AppShell -Name Frame -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool ReleaseCapture();
+[DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+[DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+[DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
+'@
+    }
+    if (-not $Заголовок) { $Заголовок = $окно.Text }
+    if (-not $Значок) { $Значок = $окно.Icon }
+    $тянется = $окно.FormBorderStyle -eq [System.Windows.Forms.FormBorderStyle]::Sizable
+    $можноСвернуть = $окно.MinimizeBox -and $окно.ShowInTaskbar
+    $в = [int](Число-Оболочки 'окно_шапка')
+    $поле = [int](Число-Оболочки 'окно_поле')
+    $текст = Цвет-Контракта 'текст'
+    $подсветка = Цвет-Контракта 'подсветка'
+    $альфа = [int](Число-Оболочки 'меню_подсветка_альфа')
+    $клиент = $окно.ClientSize
+    $окно.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $окно.ClientSize = New-Object System.Drawing.Size($клиент.Width, ($клиент.Height + $в))
+    if (@($окно.Controls | Where-Object { $_.Dock -ne [System.Windows.Forms.DockStyle]::None }).Count) {
+        $поляОкна = $окно.Padding
+        $окно.Padding = New-Object System.Windows.Forms.Padding($поляОкна.Left, ($поляОкна.Top + $в), $поляОкна.Right, $поляОкна.Bottom)
+    }
+    foreach ($к in @($окно.Controls)) {
+        if ($к.Dock -ne [System.Windows.Forms.DockStyle]::None) { continue }
+        $к.Top += $в
+        if (($к.Anchor -band [System.Windows.Forms.AnchorStyles]::Bottom) -and ($к.Anchor -band [System.Windows.Forms.AnchorStyles]::Top)) { $к.Height -= $в }
+    }
+    $окно | Add-Member -NotePropertyName 'СвояШапка' -NotePropertyValue $в
+
+    $шапка = New-Object System.Windows.Forms.Panel
+    $шапка.SetBounds(0, 0, $окно.ClientSize.Width, $в)
+    $шапка.Anchor = 'Top,Left,Right'
+    $шапка.BackColor = [System.Drawing.Color]::Transparent
+    $тащить = { param($s, $e)
+        if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+        [void][AppShell.Frame]::ReleaseCapture()
+        [void][AppShell.Frame]::SendMessage($s.FindForm().Handle, 0xA1, [IntPtr]2, [IntPtr]::Zero) }   # HTCAPTION
+    $шапка.Add_MouseDown($тащить)
+    $x = $поле
+    if ($Значок) {
+        $картинка = New-Object System.Windows.Forms.PictureBox
+        $картинка.SizeMode = 'Zoom'
+        $картинка.SetBounds($x, [int](($в - 16) / 2), 16, 16)
+        $картинка.Image = (New-Object System.Drawing.Icon($Значок, 16, 16)).ToBitmap()
+        $картинка.BackColor = [System.Drawing.Color]::Transparent
+        $картинка.Add_MouseDown($тащить)
+        $шапка.Controls.Add($картинка)
+        $x += 24
+    }
+    $имя = New-Object System.Windows.Forms.Label
+    $имя.Text = $Заголовок
+    $имя.Font = Шрифт (Число-Оболочки 'окно_кегль') $true
+    $имя.ForeColor = $текст
+    $имя.BackColor = [System.Drawing.Color]::Transparent
+    $имя.AutoSize = $true
+    $имя.Location = New-Object System.Drawing.Point($x, [int](($в - $имя.PreferredHeight) / 2))
+    $имя.Add_MouseDown($тащить)
+    $шапка.Controls.Add($имя)
+
+    $кнопки = @(@{ Знак = [string][char]0x2715; Цвет = (Цвет-Контракта 'тревога'); Действие = { param($ф) $ф.Close() } })
+    $развернуть = {
+        param($ф)
+        if ($ф.WindowState -eq [System.Windows.Forms.FormWindowState]::Maximized) { $ф.WindowState = [System.Windows.Forms.FormWindowState]::Normal }
+        else { $ф.MaximizedBounds = [System.Windows.Forms.Screen]::FromControl($ф).WorkingArea; $ф.WindowState = [System.Windows.Forms.FormWindowState]::Maximized }
+    }
+    if ($тянется -and $окно.MaximizeBox) {
+        $кнопки += @{ Знак = [string][char]0x25A1; Цвет = $подсветка; Действие = $развернуть }
+        $шапка.Tag = $развернуть
+        $шапка.Add_DoubleClick({ param($s, $e) & $s.Tag $s.FindForm() })
+    }
+    if ($можноСвернуть) { $кнопки += @{ Знак = [string][char]0x2212; Цвет = $подсветка
+                                         Действие = { param($ф) $ф.WindowState = [System.Windows.Forms.FormWindowState]::Minimized } } }
+    $размер = $в - 8
+    $правый = $окно.ClientSize.Width - $поле / 2
+    foreach ($к in $кнопки) {
+        $правый -= $размер
+        $б = New-Object System.Windows.Forms.Label
+        $б.Text = $к.Знак
+        $б.Font = Шрифт-Символов (Число-Оболочки 'окно_кегль')
+        $б.ForeColor = $текст
+        $б.BackColor = [System.Drawing.Color]::Transparent
+        $б.TextAlign = 'MiddleCenter'
+        $б.SetBounds($правый, 4, $размер, $размер)
+        $б.Anchor = 'Top,Right'
+        $б.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $б.Tag = @{ Цвет = [System.Drawing.Color]::FromArgb($альфа, $к.Цвет.R, $к.Цвет.G, $к.Цвет.B); Действие = $к.Действие }
+        $б.Add_MouseEnter({ param($s, $e) $s.BackColor = $s.Tag.Цвет })
+        $б.Add_MouseLeave({ param($s, $e) $s.BackColor = [System.Drawing.Color]::Transparent })
+        $б.Add_Click({ param($s, $e) & $s.Tag.Действие $s.FindForm() })
+        Скруглить $б (Радиус-Контракта 'кнопка')
+        $шапка.Controls.Add($б)
+        $правый -= 4
+    }
+    $окно.Controls.Add($шапка)
+    $шапка.BringToFront()
+
+    if ($тянется) {
+        $угол = New-Object System.Windows.Forms.Label
+        $угол.SetBounds(($окно.ClientSize.Width - 14), ($окно.ClientSize.Height - 14), 14, 14)
+        $угол.Anchor = 'Bottom,Right'
+        $угол.Cursor = [System.Windows.Forms.Cursors]::SizeNWSE
+        $угол.BackColor = [System.Drawing.Color]::Transparent
+        $угол.Add_MouseDown({ param($s, $e)
+            [void][AppShell.Frame]::ReleaseCapture()
+            [void][AppShell.Frame]::SendMessage($s.FindForm().Handle, 0xA1, [IntPtr]17, [IntPtr]::Zero) })
+        $окно.Controls.Add($угол)
+        $угол.BringToFront()
+    }
+    $стили = {
+        param($s, $e)
+        try {
+            $стиль = [AppShell.Frame]::GetWindowLong($s.Handle, -16)
+            [void][AppShell.Frame]::SetWindowLong($s.Handle, -16, ($стиль -bor 0x00020000 -bor 0x00080000))
+        } catch { Write-Verbose ('стили окна не приняты: ' + $_.Exception.Message) }
+    }
+    if ($окно.IsHandleCreated) { & $стили $окно $null } else { $окно.Add_HandleCreated($стили) }
+    Скруглить $окно (Радиус-Контракта 'карточка')
+    $окно.Add_Resize({ param($s, $e) Скруглить $s (Радиус-Контракта 'карточка') })
+    $окно.Add_Shown({ param($s, $e) Стекло $s })
+    if ($окно.Visible) { Стекло $окно }   # позвана после показа — событие показа уже прошло
+}
+
 function Тёмный-Контрол($контрол) {
     try { [void][AppShell.WindowApi]::SetWindowTheme($контрол.Handle, 'DarkMode_Explorer', $null) }
     catch { Write-Verbose ('тёмная тема контрола не принята: ' + $_.Exception.Message) }
@@ -550,8 +678,8 @@ function Окно-Настроек {
                       $ф.Close() })
     $низ.Controls.Add($сохр)
 
+    Шапка-Окна $f -Значок $Значок   # своя шапка на стекле, стекло и скругление — как у главного окна
     Показать-Раздел-Настроек $f
-    $f.Add_Shown({ param($s, $e) try { Тёмная-Шапка $s; Стекло $s } catch { Write-Verbose ('шапка окна настроек светлая: ' + $_.Exception.Message) } })
     if ($НеПоказывать) { return $f }
     if ($Владелец) { [void]$f.ShowDialog($Владелец) } else { [void]$f.ShowDialog() }
     return $f
@@ -609,7 +737,8 @@ function Показать-Раздел-Настроек($f) {
         $имяЗаголовка = [string]$раздел.Имя
     }
     $т.Подвкладки.Height = $верх
-    $т.Строки.SetBounds($ширинаМеню, $верх, $ширина, ($f.ClientSize.Height - $верх - $т.Низ.Height))
+    $сдвиг = if ($f.PSObject.Properties['СвояШапка']) { [int]$f.СвояШапка } else { 0 }
+    $т.Строки.SetBounds($ширинаМеню, ($верх + $сдвиг), $ширина, ($f.ClientSize.Height - $верх - $сдвиг - $т.Низ.Height))
     $т.Строки.SuspendLayout()
     $т.Строки.Controls.Clear()
     $т.Строки.AutoScrollPosition = New-Object System.Drawing.Point(0, 0)

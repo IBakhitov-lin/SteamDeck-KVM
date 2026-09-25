@@ -111,7 +111,9 @@ function Меню-Трея {
     $f.Tag = @{ Фон = $фон; Подсветка = (Цвет-Контракта 'подсветка') }
 
     $навести = { param($s, $e) $п = if ($s -is [System.Windows.Forms.Label]) { $s.Parent } else { $s }
-                 $ц = $п.FindForm().Tag.Подсветка; $п.BackColor = $ц; foreach ($к in $п.Controls) { $к.BackColor = $ц } }
+                 $ц = $п.FindForm().Tag.Подсветка; $п.BackColor = $ц
+                 $цн = if ($ц.A -lt 255) { [System.Drawing.Color]::Transparent } else { $ц }
+                 foreach ($к in $п.Controls) { $к.BackColor = $цн } }
     $увести = { param($s, $e) $п = if ($s -is [System.Windows.Forms.Label]) { $s.Parent } else { $s }
                 $ц = $п.FindForm().Tag.Фон; $п.BackColor = $ц; foreach ($к in $п.Controls) { $к.BackColor = $ц } }
     $нажать = { param($s, $e) $д = $s.Tag; $s.FindForm().Close(); if ($д) { & $д } }
@@ -182,9 +184,24 @@ function Меню-Трея {
     if ($f.BackgroundImage) {
         $прозрачный = [System.Drawing.Color]::Transparent
         $f.Tag.Фон = $прозрачный
-        foreach ($к in $f.Controls) { $к.BackColor = $прозрачный; foreach ($в in $к.Controls) { $в.BackColor = $прозрачный } }
+        $п = $f.Tag.Подсветка
+        $f.Tag.Подсветка = [System.Drawing.Color]::FromArgb([int](Число-Оболочки 'меню_подсветка_альфа'), $п.R, $п.G, $п.B)
+        foreach ($к in $f.Controls) {
+            $к.BackColor = $прозрачный
+            foreach ($в in $к.Controls) { $в.BackColor = $прозрачный }
+            Скруглить $к (Радиус-Контракта 'кнопка')
+        }
     }
     return $f
+}
+
+function Прогреть-Меню-Трея {
+    
+    try {
+        $м = Меню-Трея -Название ' ' -ЦветСостояния (Цвет-Контракта 'текст') -Пункты @(@{ Текст = ' '; Действие = { } })
+        if ($м.PSObject.Properties['ЖивоеСтекло']) { $м.ЖивоеСтекло.Stop() }
+        $м.Dispose()
+    } catch { Write-Verbose ('прогрев меню не удался: ' + $_.Exception.Message) }
 }
 
 function Место-Уведомления([int]$ш, [int]$в, $рабочая, $панель, [int]$сдвиг = 0) {

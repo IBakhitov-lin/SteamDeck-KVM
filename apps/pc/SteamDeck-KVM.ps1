@@ -462,12 +462,16 @@ function Receive-DeckReplies {
 function Test-DeckConnected {
     # Факт берётся из сетевого стека, а не из собственного журнала: установленное
     # соединение на порту протокола и есть «Deck подключён».
+    # Таблица соединений — из .NET, а не Get-NetTCPConnection: тот идёт через CIM и занимает 1,6 с на вызов
+    # (замер 25.09.2026), а вид обновляется каждую секунду — окно и меню значка переставали отвечать на нажатия.
     try {
-        $связь = Get-NetTCPConnection -LocalPort $KvmPort -State Established -ErrorAction SilentlyContinue |
-            Where-Object { $_.RemoteAddress -notlike '127.*' } | Select-Object -First 1
+        $связь = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpConnections() |
+            Where-Object { $_.LocalEndPoint.Port -eq $KvmPort -and $_.State -eq 'Established' -and
+                           -not [System.Net.IPAddress]::IsLoopback($_.RemoteEndPoint.Address) } | Select-Object -First 1
         if ($связь) {
-            if ($script:Pair.deck_address -ne $связь.RemoteAddress) {
-                $script:Pair.deck_address = $связь.RemoteAddress
+            $адрес = $связь.RemoteEndPoint.Address.ToString()
+            if ($script:Pair.deck_address -ne $адрес) {
+                $script:Pair.deck_address = $адрес
                 Save-Pair
             }
             return $true
@@ -1075,6 +1079,12 @@ Open-Beacon
 Update-View
 $timer.Start()
 $focusTimer.Start()
+# Меню значка прогревается через две секунды после запуска: первое нажатие открывает его сразу,
+# а не через полторы секунды разбора функций и первого снимка стекла.
+$прогрев = New-Object System.Windows.Forms.Timer
+$прогрев.Interval = 2000
+$прогрев.Add_Tick({ param($s, $e) $s.Stop(); $s.Dispose(); Прогреть-Меню-Трея })
+$прогрев.Start()
 
 # Первое окно процесса Windows показывает так, как велено в STARTUPINFO
 # запускающего, а запускает нас VBS со скрытым окном (иначе мигала бы консоль).
